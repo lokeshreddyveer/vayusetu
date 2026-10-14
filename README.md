@@ -7,6 +7,16 @@ VayuSetu is a VPN, encrypted DNS and Safari ad-blocking app for iPhone and Mac. 
 
 It has no accounts, no analytics and no servers of its own.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/iphone-home.png" width="190" alt="Home">
+  <img src="assets/screenshots/iphone-settings.png" width="190" alt="Settings">
+  <img src="assets/screenshots/iphone-checks.png" width="190" alt="Checks">
+  <img src="assets/screenshots/iphone-adblock-test.png" width="190" alt="Adblock test">
+</p>
+<p align="center"><img src="assets/screenshots/mac-home.png" width="640" alt="VayuSetu on the Mac"></p>
+
 ## Download
 
 | Platform | Status |
