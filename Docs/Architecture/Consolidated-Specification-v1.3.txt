@@ -1,0 +1,536 @@
+VayuSetu
+Consolidated iOS Product, UX, Security & Engineering Architecture
+Specification revision 1.3  |  11 October 2026  |  Implementation baseline  |  iOS-first
+A single authoritative specification. Replaces document revisions 1.0, 1.1 and 1.2; no append-only supersession rules.
+Document governance
+Item
+Decision
+Specification version
+1.3 (document revision, not application version or build number)
+Scope
+Consumer iOS app first; macOS is a separate future target sharing portable libraries where practical
+Release
+v1 means the first production iOS release, distinct from this document revision
+Decision hierarchy
+This document is canonical. The status model, rule algorithm, source tree and roadmap each appear exactly once.
+Labels
+COMMITTED = agreed behavior; CONDITIONAL = gated by API/entitlement proof; DEFERRED = post-v1; VALIDATE = requires evidence.
+Principle
+Local-first, truthful evidence, native interaction, no unnecessary accounts or telemetry.
+Contents
+01 Product vision and v1 cut line
+02 Apple platform feasibility and Phase 0
+03 Navigation and information architecture
+04 Design system and icon specifications
+05 Home screen
+06 Profiles and VPN user journeys
+07 DNS screen and resolver policies
+08 Adblock and filtering UX
+09 Safari content blocker
+10 Checks and Settings
+11 Canonical protection status model
+12 App architecture and target graph
+13 VPN engines and adapter contract
+14 DNS execution architecture
+15 Canonical filtering rule model
+16 Privacy Integrity Engine
+17 Public API integration and consent
+18 Storage and data security
+19 Session timing, Live Activities and metrics
+20 Reliability, recovery and privacy controls
+21 Feature capability and surface matrix
+22 Performance, accessibility and QA
+23 One delivery roadmap
+24 Release acceptance and decisions
+Appendix A Canonical source tree
+Appendix B Swift reference interfaces
+Appendix C UI copy and states
+01 Product vision and v1 cut line
+VayuSetu is a privacy-first native iOS network utility unifying user-supplied VPN profiles, independent DNS configuration, Safari content blocking, selected DNS filter lists where technically enforceable, and on-demand diagnostics. It does not provide VPN servers, playlists, tracking, or a mandatory cloud account.
+v1 committed
+Conditional / post-v1
+Five native tabs; native dark-first UI; custom coherent icons
+macOS app (separate project)
+Import/rename/switch supported VPN profiles; observable connection state
+Local DNS-only interception without VPN interface (Phase 0 gated)
+Supported encrypted DNS configuration and strict fallback policy
+DoQ/DNSCrypt/DoH3 only with verified compatible implementation
+Safari Content Blocker with user-selected lists
+Safari Web Extension, element picker and cosmetic advanced workflows
+Privacy Integrity Engine; four honest status tiles
+Per-domain DNS statistics and Rule Inspector where queries are unobservable
+Local event history, emergency reset, basic diagnostics
+Advanced trusted Wi-Fi, censorship APIs, reputation lookups, privacy receipts
+IP check and optional ASN; opt-in speed test only if ready
+Google Safe Browsing integration, captive portal assistant, multihop
+The v1 release does not depend on success of the local DNS-only filtering feasibility gate. Failure of that gate removes only that capability and its dependent DNS filtering features; independent encrypted DNS and Safari content blocking remain in scope.
+02 Apple platform feasibility and Phase 0
+Capability
+Implementation route
+Gate / caveat
+WireGuard/OpenVPN
+NEPacketTunnelProvider and licensed/maintained protocol libraries
+Entitlement, App Review, battery and routing validation
+IKEv2/IPsec
+NEVPNManager / NEVPNProtocolIKEv2 where supported
+OS-managed behavior and profile policy
+DNS-only encrypted
+NEDNSSettingsManager for supported DoH/DoT
+Validate entitlement, coexistence and OS behavior
+Local DNS-only filtering, no VPN interface
+NEDNSProxyProvider only if consumer distribution permitted
+HARD GO/NO-GO: entitlement + App Store distribution + real-device test
+Safari declarative filtering
+Safari Content Blocker + SFContentBlockerManager
+Enabled observable; rule enforcement not proven by enabled alone
+Trusted network automation
+VPN On Demand; network identity if available
+SSID access restrictions, permissions, entitlement and privacy
+Strict routing
+includeAllNetworks / applicable On Demand policy
+OS exclusions and platform behavior; no absolute kill-switch claim
+Live Activities
+ActivityKit / WidgetKit
+Activity time-limited; cannot autonomously restart after expiry without eligible app foreground/push-to-start
+Phase 0 exit artifacts
+Entitlement and distribution evidence for each NetworkExtension target, tested on real iOS devices.
+DNS-only without a VPN interface: explicit GO/NO-GO decision and fallback user copy; no silent tunnel substitute.
+Proof of Safari enabled-state observation and successful rule compilation/reload; record the difference.
+IPv4/IPv6, handoff, captive network, VPN reconnection and system exception test notes.
+Approved v1 feature flags, supported protocol matrix, privacy disclosures and App Store risks.
+03 Navigation and information architecture
+Native tab
+Main destinations
+Cross-navigation
+Home
+VPN power, session, transfer rates, VPN/DNS/Safari/Adblock status, events
+Tiles open respective detail screens; diagnostics shortcut opens Settings → Checks
+Profiles
+User-imported VPN profiles, connection rules, profile details
+One-tap switch, import, rename, delete, recent/name/last-used sort
+DNS
+Mode, resolvers, transport, strict policy, fallback, diagnostics
+DNS-only supported independently of VPN
+Adblock
+Overview, selected filter lists, custom rules, Safari, health, statistics
+Safari tile opens Adblock → Safari
+Settings
+Checks, privacy, compatibility, logs, backup, reset, appearance
+No sixth tab; Checks is a Settings destination
+No external browser or hosted dashboard for normal workflows. Apple-managed permission dialogs, extension enablement and necessary Settings handoffs are accepted and clearly explained. The app never represents these OS surfaces as an in-app custom screen.
+04 Design system and icon specifications
+Token
+Specification
+Surface
+Dark navy #070B12; cards #111A25; raised #192535; dividers #273342
+Primary text
+Near-white #F5F7FB; secondary #9AA8BA; accessible contrast in all states
+Active
+Green #4DDEA9
+Inactive / unknown
+Gray #8997A9; state text differentiates Inactive and Unknown
+Pending / degraded / needs attention
+Amber #F2B75E
+Failure
+Red #F16E75
+Icon system
+Handcrafted 24×24 optical grid, consistent ~2pt rounded strokes, no stock mixed families, no glow/3D
+Motion
+Short, restrained transitions; Reduce Motion respected; no indefinite fake loading
+Type
+System San Francisco; Dynamic Type and VoiceOver; monospaced/tabular session numbers
+VPN icon: precise network tunnel/shield hybrid. DNS: connected nodes rather than a generic globe. Safari: compass-inspired recognizable mark without copying Apple trademark artwork. Adblock: distinct blocking shield. Use a common visual grammar and optical alignment; colors supplement, never replace, status text.
+05 Home screen
+Hierarchy: branded header and settings shortcut → primary VPN card with connection state and power control → profile/protocol → session timer DD:HH:MM:SS (days not capped at 99) → measured upload/download → 2×2 protection tile grid → recent privacy event and Run Checks shortcuts → native five-tab bar.
+Tile
+Observed green label
+Gray labels
+Amber / red labels
+VPN
+Connected
+Disconnected / Unknown
+Connecting, Enabled, not verified, Degraded / Error
+DNS
+Active (supported evidence)
+Inactive / Unknown
+Enabled, not verified; Needs attention / Error
+Safari
+Enabled (OS reports enabled, ruleset ready)
+Disabled / Unknown
+Enabled, not verified; Needs attention / Error
+Adblock
+Active (confirmed enforcing path)
+Inactive / Unknown
+Enabled, not verified; Limited; Needs attention / Error
+Tile taps navigate to details; only the large power control initiates VPN connect/disconnect. No automatic toggle from a status tile. Unknown is never labeled Inactive. Safari never claims “Protecting” merely because iOS reports the extension enabled. Speed readings must come from actual counters and a sampling interval; show “Unavailable” rather than demo numbers.
+06 Profiles and VPN user journeys
+Only user-imported VPN profiles appear in the VPN list; DNS presets live in DNS, not Profiles.
+Support import from Files and share sheet; QR for compatible formats. Validate format, endpoint, allowed IPs, secrets and duplicate identity before saving.
+User-defined profile name separate from provider/server identity. Search and sort recent, alphabetical or last used.
+Import while connected does not interrupt active session. Selecting another profile initiates one serialized switch operation; disclose possible brief disconnect.
+Store private keys/passwords in Keychain; redact them in previews, logs, support exports and screenshots when possible.
+Global Privacy Lock policy in Profiles → Connection Rules, with per-profile overrides only when explicitly defined.
+Profiles can specify DNS policy; conflict resolver makes effective DNS source explicit.
+07 DNS screen and resolver policies
+Mode
+User-facing meaning
+System DNS
+Use OS/network DNS; do not claim encryption
+Encrypted DNS-only
+Configure supported encrypted resolver without a VPN tunnel
+VPN + DNS
+VPN with explicit DNS selection or VPN-provided DNS policy
+Local filtering DNS-only (CONDITIONAL)
+Only if Phase 0 validates a real no-VPN-interface enforcement mechanism
+VPN tunnel with local DNS filtering (CONDITIONAL)
+Tunnel-based DNS interception; never mislabeled as no-VPN mode
+Resolver catalog entries are optional presets, never provider endorsements. Custom IPv4/IPv6 and DoH/DoT endpoints include bootstrap, TLS hostname and certificate validation. DoQ, DNSCrypt and DoH3 require tested transport implementations and compatibility gates. Fallback levels: Strict encrypted (fail closed), encrypted alternatives, or plaintext/system compatibility only with informed opt-in. Never silently downgrade.
+Benchmarking is on-demand and may reveal network metadata to resolver operators. Present latency, reliability, protocol support and last-tested timestamp, not a definitive privacy score.
+08 Adblock and filtering UX
+Suggested HaGeZi, OISD and StevenBlack lists are visible but unselected by default; the user must enable each one.
+Support custom URLs/files, format validation, HTTPS fetching, ETag where supported, size caps, checksum or signature when supplied, atomic compilation and rollback.
+Editor defaults user-created rules to Domain + subdomains, with an explicit Exact-only option. Every rule row shows its scope. Support syntax validation and nonsecret import/export.
+Filtering paths are distinct: Safari declarative blocking, DNS inside a VPN tunnel, optional no-VPN DNS proxy, or upstream resolver filtering. Never combine their counters.
+Advanced Rule Inspector and per-domain DNS counts are deferred unless a supported enforcement path exposes events. v1 includes a local Test Rule Match preview for user-defined and subscribed rules, with a clear explanation of the winning tier and scope; no fabricated live counts.
+Temporary exceptions have scope labels: tunnel DNS may enforce expiry in extension; Safari requires rebuild/reload and cannot guarantee timely expiry while app is suspended.
+Filtering does not remove all advertisements and DNS filtering does not cosmetically hide page elements.
+09 Safari content blocker
+Use Safari Content Blocker as the v1 declarative path. Compile supported rules into Safari-compatible JSON in the App Group, validate atomically, request reload using SFContentBlockerManager, then query enablement. Track three separate facts: OS enabled state, latest rule package/reload result, and rule effectiveness (not generally directly observable). Green tile label = Enabled when enablement and readiness are supported; it is not a guarantee of each individual block.
+Safari Web Extension is a post-v1 separate capability for advanced cosmetic rules or user interactions if justified. Native extension use is allowed. Initial enablement may require the user to visit Apple-controlled Settings.
+10 Checks and Settings
+Destination
+Contents
+Settings → Checks
+Public IP (IPv4/IPv6), observed DNS path, routing, speed (consented), ping/jitter, network info and supported IPv6/DNSSEC checks
+Settings → Privacy
+Detailed query history off by default, local retention, redacted export, privacy notices
+Settings → Compatibility
+Potential VPN/DNS conflicts, unsupported configurations, platform limitations
+Settings → Data
+Local backup, restore, retention and delete; secret inclusion opt-in and encrypted only
+Settings → Advanced
+Extension health, local event log, emergency reset and safe recovery
+Settings → Appearance
+Accessibility, reduced motion, text size and theme
+Wi-Fi scans, LAN discovery and device-level attribution are restricted on consumer iOS. Present only permitted information; request local-network or location-related permissions when truly required. Captive portal login assistant is deferred: rely on iOS captive portal handling and show native explanatory guidance only.
+11 Canonical protection status model
+This is the sole normative definition. All screens, services, acceptance criteria and example code reference it. Desired state and observed state are distinct.
+Field
+Meaning
+subsystem
+vpn | dns | safari | adblock
+desiredEnabled
+User/configuration intent, not proof of operation
+observed
+inactive | enabledNotVerified | starting | active | limited | needsAttention | error | unknown
+label
+Presentation text derived by subsystem (e.g., Safari active → Enabled)
+provenance
+OS status, extension acknowledgment, route measurement, user preference or unavailable
+observedAt / stale
+Evidence timestamp and freshness policy
+reason / detail
+Safe user-facing explanation, without secrets
+capabilities
+Measured supported operations, not assumed from user preferences
+Color is derived from observed state: active=green; inactive and unknown=gray; enabledNotVerified, starting, limited and needsAttention=amber; error=red. Gray Unknown must always display “Unknown”, not “Inactive”. At startup a persisted enabled toggle without OS confirmation is enabledNotVerified. If no intent or observation can be established, show Unknown. On stale evidence, reconcile; never retain green indefinitely.
+12 App architecture and target graph
+SwiftUI views → feature view models → application coordinators → typed services → platform adapters and extensions. PrivacyIntegrityEngine is the single source of normalized protection snapshots. A StatusRepository may persist history but must not independently derive states.
+Module
+Responsibility
+AppCoordinator
+Lifecycle, deep links, navigation and orchestration
+ConnectionCoordinator
+Serialized VPN state machine, profile switching and retries
+VPNCore
+Typed adapters, imports, profiles and counters
+DNSCore
+Resolver policy, transport selection and capability resolution
+FilteringCore
+Rules, lists, compilation and surface-specific enforcement packages
+SafariCore
+Rule package management, reload and OS enablement observations
+PrivacyIntegrityEngine
+Canonical snapshot reconciliation, provenance, staleness and conflicts
+DiagnosticsCore + APIClients
+On-demand native checks, consent, normalization, cache and rate limits
+Persistence + Security
+SQLite/GRDB, Keychain, App Group, redaction and backup
+DesignSystem
+Native components, custom icon assets and accessibility
+13 VPN engines and adapter contract
+Use one VPNAdapter interface across Section 13 and Appendix B. It exposes prepare, connect, disconnect, collectCounters, capabilities and a statusStream. The application calls the adapter through ConnectionCoordinator, not directly from views. Native IKEv2 uses an adapter wrapper over OS VPN configuration; packet tunnels host WireGuard/OpenVPN where entitlements and libraries permit.
+Connection state machine: idle → preparing → connecting → connected → disconnecting → idle; error and reconnecting branches are explicit. Serialize connect/switch/disconnect requests; protect against stale callbacks with operation IDs. Switching may briefly disconnect. Strict route policies must not promise traffic suppression beyond OS capabilities.
+14 DNS execution architecture
+Execution Path A: OS encrypted DNS settings without VPN interface. Path B: DNS within VPN packet tunnel with local query access where implemented. Path C: DNS proxy without VPN interface, conditional on Phase 0. Path D: user-selected upstream filtering resolver; VayuSetu cannot infer per-domain block counts without an upstream-supported and consented statistics interface.
+A transport adapter must implement endpoint validation, reachability, authenticated negotiation, cancellation, timeout, bootstrap handling and strict fallback policy. Resolver metadata is not equivalent to actual enforcement. IPv6, split DNS, captive networks and network transitions require real-device tests.
+15 Canonical filtering rule model
+Rule grammar: new user-entered “example.com” defaults to Domain + subdomains, covering example.com and all subdomains. The editor offers Exact-only explicitly. Imported hosts-format entries match exact hostnames; supported ABP-style ||example.com^ matches the apex and subdomains. Normalize IDNA/punycode and lowercase hostnames; reject malformed wildcards and unsafe public-suffix scopes. Show “Exact” or “Domain + subdomains” on every row.
+Resolution algorithm: (1) collect rules applicable to the enforcement surface; (2) evaluate the USER tier first, ahead of all subscribed-list matches; (3) within that tier, prefer exact-host over broader domain scope, then longest matching domain suffix; (4) for equally specific user rules, Allow wins over Block; (5) if no user rule matches, evaluate subscribed lists according to their native semantics, most-specific match, supported exception syntax and deterministic source/ID tie-breakers. Thus a user Allow example.com + subdomains overrides a subscribed Block ads.example.com; a user Exact Block ads.example.com overrides the broader user Allow. Never silently rewrite imported rule scope.
+A non-overridable rule category is NOT assumed. If enterprise/OS safety restrictions exist, treat them as platform policy outside the user rule engine and disclose them. No vague “security-critical exception” is allowed.
+16 Privacy Integrity Engine
+Ingests adapter status streams, OS configuration evidence, Safari extension enablement, filter compiler/reload acknowledgments, DNS resolver observations and route checks. Reconcile at launch, foreground, network change, connect/switch, extension restart and stale timeout. Store timestamped local events without query history by default.
+Integrity reports are evidence summaries, not an oracle. When two sources conflict, preserve provenance and show Needs attention or Limited with a reason. Do not let API-derived public IP tests override OS VPN connection state. Use no hidden background surveillance.
+17 Public API integration and consent
+Adapter
+Native destination
+Privacy / scope
+ipify or equivalent IP endpoint
+Checks → Public IP; optional Home detail
+User-initiated; reveals requesting IP to provider
+Independent IP/trace endpoint
+Checks → Route observation
+Corroboration only, not proof of zero leaks
+RIPEstat
+Checks → IP ownership / ASN
+Public network metadata; cache; no continuous polling
+M-Lab NDT7
+Checks → Speed test
+Explicit consent, data usage notice and measurement collection disclosure
+OONI public data
+Post-v1 Checks → Network insights
+Public aggregate research; avoid implying direct device test
+Curated filter list URLs
+Adblock → Lists
+User-selected subscriptions, downloaded inside app
+Google Safe Browsing
+DEFERRED
+API key, licensing and privacy unresolved; no embedded client secret
+All results render in native SwiftUI. No web redirects, third-party embedded dashboards or mandatory external accounts. URLSession clients use TLS, input validation, timeouts, cancellation, privacy gate, minimal caching and local timestamps. Network requests are opt-in when they reveal sensitive context; do not contact every provider just because Home opens.
+18 Storage and data security
+Storage
+Content
+Keychain
+Private keys, VPN passwords, tokens; use suitable accessibility policy
+SQLite / GRDB
+Profiles metadata, rules, local events, aggregate stats, diagnostic cache
+App Group
+Versioned sanitized configs, compiled Safari rules, extension acknowledgments
+UserDefaults
+Nonsecret presentation settings only
+Encrypted export
+Optional backup; secrets excluded by default, included only by explicit informed consent with encryption
+Never include credentials in ordinary diagnostic/support exports. Sensitive backups are an explicit exception: user-authorized, encrypted, locally generated, clearly labeled and never automatically uploaded. Default no telemetry, no cloud sync and detailed DNS query logging disabled. Data retention and delete operations must be available in-app.
+19 Session timing, Live Activities and metrics
+For OS VPN configurations use NEVPNConnection.connectedDate when available and appropriate. For packet tunnel/independent DNS modes use authoritative transition timestamps with monotonic elapsed time during runtime and persisted wall-clock reconciliation across relaunch. Session resets on actual disconnect according to a documented policy. Format DD:HH:MM:SS with no artificial 99-day limit.
+Live Activities can display sampled duration and traffic rates, but iOS controls update cadence. An activity generally ends after about eight hours and may remain visible on Lock Screen for a limited additional period. With no backend or push-to-start, VayuSetu does not automatically restart an expired activity in the background. A new activity is requested only after the user opens VayuSetu in the foreground and iOS permits it. The VPN continues independently.
+Traffic rate = byte counter delta / elapsed monotonic interval. Reset baselines on reconnection/counter reset. Blocked statistics count actual enforcement events only; Safari content blocker does not expose reliable per-request blocked counters.
+20 Reliability, recovery and privacy controls
+Privacy Lock: evaluate includeAllNetworks and On Demand matching where supported, validate platform exclusions and display clear capability wording; never claim a universal kill switch. Emergency Reset is a mandatory v1 safety valve for potential connectivity lockout.
+Strict encrypted DNS rejects silent plaintext fallback. Failure becomes Needs attention/Error and offers a consented policy change, not a hidden downgrade.
+Emergency reset (v1): disable VayuSetu-managed active connections and DNS settings using available APIs, preserve profiles, show which OS-managed settings require manual steps.
+Atomic config staging, last-known-good rollback, safe migration, bounded retry and exponential backoff. Safari filter-list health is v1: last update, compiled count, rejected rules, capacity failure and rollback outcome. Never silently truncate oversized lists.
+Captive portal: rely on iOS login behavior; no in-app captive web browser in v1. Phase 0 must test strict routing (including includeAllNetworks) against captive login. Offer a clearly disclosed, user-confirmed temporary relaxation of applicable VayuSetu-managed Privacy Lock policy, with restoration guidance. Any connectivity probe is user-initiated or separately disclosed.
+Trusted SSID automation: post-v1 pending network identity permissions, SSID/location eligibility, VPN On Demand rules and real-device behavior.
+Local privacy event timeline: transitions and failures, no browsing content or query history by default.
+21 Feature capability and surface matrix
+Feature
+Tunnel DNS
+DNS-only OS
+DNS proxy (gated)
+Upstream filtering
+Safari blocker
+Per-domain match inspection
+Yes, if implemented
+No
+Yes, if approved
+Only if provider exposes
+No per-request API
+Domain block counts
+Observable if instrumented
+No
+Observable if approved
+Not locally observable
+No reliable counts
+Custom local DNS rules
+Yes
+No
+Conditional
+No, unless provider API
+Not applicable
+Temporary exception expiry
+Extension timer possible
+Not applicable
+Conditional
+Provider-dependent
+Requires rebuild/reload; no background guarantee
+Filter-list updates
+App → extension
+Not applicable
+App → proxy
+Provider-specific
+App → content blocker reload
+Status evidence
+Tunnel and policy
+OS config; tests limited
+Proxy state if available
+Resolver settings, not query proof
+OS enabled + reload readiness
+22 Performance, accessibility and QA
+Test native five-tab navigation on small and large iPhones, landscape where supported, Dynamic Type and VoiceOver.
+Validate accessibility announcements: “DNS, Unknown” differs from “DNS, Inactive”; Safari green reads “Safari, Enabled”.
+Measure launch responsiveness, profile import of large files, filter compilation throughput, memory peak, extension cold start, battery impact and reconnection times against baselined targets.
+Use deterministic unit tests for rule specificity, IDNA, tie-breakers, snapshot staleness, time formatting, adapter state and config migration.
+Real-device integration tests for Wi-Fi/cellular handoffs, IPv6, DNS strict fallback, permission denial, captive networks, VPN conflicts and extension reload failure.
+Live Activity test at expiry boundary: activity ends, tunnel continues, no unsupported autonomous restart claim.
+Security: logs and normal exports contain no secrets; only explicitly authorized encrypted backup may contain credentials.
+Automated CI includes formatting, linting, static analysis, dependency/license audit, unit/UI tests and signed release validation.
+23 One delivery roadmap
+Phase
+Scope
+Exit gate
+0 — Feasibility
+Entitlements, distribution, DNS-only proxy go/no-go, Safari rule capacity/extension count, captive login under strict routing, routing exceptions
+Real-device evidence, current Safari content-blocker rule limit and oversize behavior, locked v1 feature matrix
+1 — Foundation
+Swift packages, canonical status model, persistence, five-tab UI, icon assets
+Accessible Home with simulated fixtures then observed state wiring
+2 — VPN + reliability
+Adapters, import/switch, Privacy Lock feasibility, route observations, emergency reset
+Reconnect, switch and recovery tests pass
+3 — DNS
+Encrypted DNS-only, VPN DNS policy, strict fallback, custom endpoints
+No silent downgrade; mode tests pass
+4 — Filtering
+User-selected lists, deterministic compiler, Safari-size preflight, filter-list health and rollback; tunnel DNS enforcement if supported
+Deterministic precedence and rollback tests
+5 — Safari
+Content Blocker extension, state query, package reload
+Enabled/readiness evidence and error handling
+6 — Checks + API
+Local IP/DNS/route checks, consented ipify or equivalent and RIPEstat ASN lookup, optional M-Lab speed test, privacy event timeline
+Native results, consent and privacy review
+7 — Activity + polish
+Timer, Live Activity constraints, accessibility, performance
+Eight-hour and low-power acceptance
+8 — Release
+Security, App Store review readiness, localization, migration, regression
+Release checklist signed off
+P0 means v1 essential or feasibility gate; P1 means post-v1 improvement after Phase 0; P2 means optional later. Conditional capabilities never silently become release commitments. Emergency reset and route integrity are in Phase 2; Privacy Lock also in Phase 2.
+24 Release acceptance and decisions
+Area
+Pass criteria
+Navigation
+Exactly five native tabs; Checks under Settings and shortcut on Home
+Statuses
+One canonical model; Unknown gray but explicitly labeled; Enabled, not verified amber; Safari green = Enabled
+VPN
+Profile switch serialized; credentials secured; real counters or unavailable
+DNS
+DNS-only encrypted mode without VPN where supported; strict fallback never silently downgrades
+Filtering
+Opt-in lists; deterministic most-specific matching; per-surface capability disclosure
+Safari
+OS enablement checked; rule readiness distinct; no unsupported blocked-count claim
+Privacy
+No default telemetry/query history; consented API checks; native screens; no external redirects
+Security
+Ordinary exports never contain secrets; explicit encrypted backup may contain user-approved secrets
+Recovery
+Emergency reset and rollback validated on real device
+Live Activity
+Duration accuracy; eight-hour limit and no background auto-restart claim tested
+Accessibility
+VoiceOver, Dynamic Type, contrast, Reduce Motion and small-device layouts pass
+Performance
+Measured startup, memory, battery, compile and reconnection budgets documented
+Phase 0
+Local DNS-only filter capability GO/NO-GO recorded; dependent features gated
+Open decisions for engineering validation: exact entitlement eligibility, OpenVPN library maintenance/license, supported DNS transports by iOS version, Safari rule limits, measured performance budgets, and external API terms. These do not alter the product principles above.
+Appendix A — Canonical source tree
+VayuSetu/
+  Apps/VayuSetuIOS/{App,Navigation,Home,Profiles,DNS,Adblock,Checks,Settings}
+  Packages/{DesignSystem,VayuSetuCore,VPNCore,DNSCore,FilteringCore,
+            SafariCore,PrivacyIntegrity,DiagnosticsCore,APIClients,
+            Persistence,Security}
+  Extensions/{PacketTunnelExtension,SafariContentBlocker,
+              DNSProxyExtension-Conditional,LiveActivityWidget}
+  Resources/{Icons,Localizations,FilterCatalog}
+  Tests/{Unit,Integration,Extension,UI,Performance}
+Appendix B — Canonical Swift reference interfaces
+The following illustrative interfaces are aligned with Sections 11–16. They are contracts, not drop-in production code.
+enum ProtectionSubsystem: String, Codable { case vpn, dns, safari, adblock }
+enum ObservedState: String, Codable {
+  case inactive, enabledNotVerified, starting, active, limited,
+       needsAttention, error, unknown
+}
+enum EvidenceSource: String, Codable {
+  case osStatus, extensionAcknowledgement, routeObservation,
+       resolverObservation, userPreference, unavailable
+}
+struct ProtectionSnapshot: Codable {
+  let subsystem: ProtectionSubsystem
+  let desiredEnabled: Bool?
+  let observed: ObservedState
+  let provenance: EvidenceSource
+  let observedAt: Date?
+  let stale: Bool
+  let reason: String?
+}
+struct VPNCapabilities {
+  let supportsCounters: Bool
+  let supportsOnDemand: Bool
+  let supportsStrictRouting: Bool
+}
+struct TrafficCounters { let bytesIn: UInt64; let bytesOut: UInt64 }
+protocol VPNAdapter {
+  var capabilities: VPNCapabilities { get }
+  var statusStream: AsyncStream<ProtectionSnapshot> { get }
+  func prepare(profileID: UUID) async throws
+  func connect() async throws
+  func disconnect() async throws
+  func collectCounters() async throws -> TrafficCounters?
+}
+Appendix C — UI status wording and truthfulness
+Observed state
+Color
+User-facing example
+active
+Green
+VPN Connected; DNS Active; Safari Enabled; Adblock Active
+inactive
+Gray
+VPN Disconnected; DNS Inactive; Safari Disabled; Adblock Inactive
+unknown
+Gray
+VPN Unknown; DNS Unknown; Safari Unknown; Adblock Unknown
+enabledNotVerified
+Amber
+Enabled, not verified
+starting
+Amber
+Connecting / Starting
+limited
+Amber
+Limited — some protection surfaces unavailable
+needsAttention
+Amber
+Needs attention — actionable configuration issue
+error
+Red
+Error — operation failed
+Decision register — v1.3
+Decision
+Rationale
+User rules default to Domain + subdomains
+Fixing a site often requires API/CDN subdomains; Exact remains explicit.
+User rules outrank subscribed lists
+A deliberate user exception must not be silently defeated by a more-specific list entry.
+Safari capacity verified in Phase 0
+Large curated lists can exceed platform rule budgets; no silent truncation.
+Filter-list health and rollback are v1
+Broken updates must not remove the last working protection ruleset.
+Privacy Lock requires Emergency Reset
+Strict routing can disrupt connectivity, including captive login.
+Captive login assistant deferred
+OS handles login; native-only policy and entitlement uncertainty.
+Diagnostic providers and consent
+ipify-equivalent for public IP, RIPEstat for ASN, optional M-Lab speed; user initiates tests and sees disclosure.
+Live Activity restart only after foreground return
+No server or push-to-start; cannot promise background restart.
+Conflict detection limited to observable signals
+Avoid claiming access to restricted iOS network configuration.
+CNAME detection and advanced rule inspection deferred
+Depends on local DNS response visibility and Phase 0 capabilities.
+End of specification — revision 1.3.
+Release classification: P0 = v1 required or Phase 0 validation; P1 = post-v1 after Phase 0; P2 = optional later. v1 includes local privacy event timeline, filter-list health, observable conflict detection, Privacy Lock and Emergency Reset. CNAME analysis, captive assistant, advanced trusted networks and advanced Rule Inspector are post-v1.

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>$(VAYU_DISPLAY_NAME)</string>
+	<key>CFBundleName</key>
+	<string>$(VAYU_DISPLAY_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.Safari.content-blocker</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).ContentBlockerRequestHandler</string>
+	</dict>
+	<key>VayuRulesFile</key>
+	<string>$(VAYU_RULES_FILE)</string>
+	<key>VayuAppGroup</key>
+	<string>group.app.vayusetu.shared</string>
+</dict>
+</plist>

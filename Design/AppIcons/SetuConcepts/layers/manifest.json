@@ -1,0 +1,17 @@
+{
+  "canvas": [
+    1024,
+    1024
+  ],
+  "suggestedOrder": [
+    "Background.svg",
+    "Wind.svg",
+    "Pebble-1.svg",
+    "Pebble-2.svg",
+    "Pebble-3.svg",
+    "Pebble-4.svg",
+    "Pebble-5.svg",
+    "Accent.svg"
+  ],
+  "note": "Editable SVG and PNG layers; not an Icon Composer .icon document. Use native materials and preview actual clear/tinted modes before release."
+}

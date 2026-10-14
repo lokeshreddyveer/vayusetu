@@ -1,0 +1,7 @@
+observer.example.com {
+	reverse_proxy 127.0.0.1:8787 {
+		# Replace any client-supplied address header with the address Caddy sees.
+		header_up X-Forwarded-For {http.request.remote.host}
+		header_up -X-Real-IP
+	}
+}

@@ -1,0 +1,8 @@
+build/
+dist/
+.DS_Store
+*.conf
+*.mobileconfig
+Tools/
+Vendor/wireguard-apple/.git/
+xcuserdata/

@@ -1,0 +1,13 @@
+# QR import and native IKEv2
+
+QR import on iOS opens the native camera directly and requests permission at use. Only bounded WireGuard configuration payloads are accepted. URLs, shell hooks, invalid syntax and null bytes are rejected. A summary and editor review precede saving; scanning never connects. Capture stops on cancel, detection and backgrounding. Denied permission links to app Settings. Application code does not store or upload camera frames.
+
+Native IKEv2 uses NEVPNManager and NEVPNProtocolIKEv2 with the Personal VPN entitlement. Password authentication uses a persistent Keychain reference. Certificate authentication checks a PKCS#12 identity before configuring the native protocol on iOS. Server identity and saved routing flags are checked. Previous preferences and credentials are restored on setup failure. Only VayuSetu-owned configurations are changed; conflicting personal VPN configurations are rejected. AppStore serializes connection/switch operations. The existing TunnelController observes both adapter types.
+
+IKEv2 uses server-managed DNS; VayuSetu's selected DoH/DoT endpoint is not applied. Native traffic counters are unavailable. Required-native-IPv6 policy is rejected pending proof. OS connected status does not independently verify exit identity, DNS transport or leak protection.
+
+OpenVPN is unavailable and on hold at the user's request. Saved drafts are preserved; no OpenVPN engine dependency was added.
+
+Evidence: 2 real-iPhone UI tests passed in ios/build/qr-direct-camera.xcresult, including direct camera startup/stop/cancel and supported editor entry points. The user confirmed optical recognition of the synthetic reserved-domain QR in the app. Existing 295 networking assertions passed after integration. Separately, 16 manual-draft validation/metadata checks and 13 QR/IKEv2 policy checks passed without modifying actual VPN preferences or real Keychain records.
+
+Remaining: The OS now reports the user-added Fast/IKEv2 tunnel established, and the dashboard and row action were checked on the iPhone. Sustained connectivity, Wi-Fi/cellular continuity and independent security verification have not been confirmed. Native IKEv2 profiles now support confirmed deletion and password-encrypted profile-specific or global backups. Credentials are excluded by default; a metadata-only restore requires configuration re-entry. Version 1 backups remain readable. Version 2 restore journals recover WireGuard, DNS and native metadata together, deleting only newly allocated restore accounts. Saved OpenVPN drafts remain excluded. The user subsequently added a configuration; see Compact-Profiles.md for the actual device outcome. No new TestFlight upload was performed.

@@ -1,0 +1,35 @@
+ios/build/
+ios/dist/
+ios/Tools/
+ios/Vendor/wireguard-apple/.git/
+macos/build/
+macos/dist/
+**/.build/
+**/xcuserdata/
+.DS_Store
+*.conf
+*.mobileconfig
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.cer
+*.ipa
+*.dmg
+*.xcarchive
+*.xcresult
+# Local snapshots contain signed archives and embedded provisioning profiles.
+Archive-Backups/
+Source-Backups/
+
+# The website lives in its own repository.
+site/
+
+# Verification evidence (screenshots, videos, device manifests) and machine-specific or generated files stay local.
+Docs/verification-*/
+Docs/Release/Evidence/
+Design/AppIcons/**/package.cjs
+Design/AppIcons/**/render.cjs
+macos/VayuSetuSigning.xcodeproj/
+macos/build/
+.github/workflows/ios.yml

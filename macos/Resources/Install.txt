@@ -1,0 +1,14 @@
+VayuSetu for macOS 0.2.0
+
+Drag VayuSetu.app to Applications, then open it.
+Requires macOS 14 or later. Universal: Apple Silicon and Intel.
+
+This local development build is ad-hoc signed and not notarized. It is intended for the owner to test on this Mac; it is not a notarized public release. If macOS blocks opening, inspect the app and use the per-app Open Anyway control in System Settings > Privacy & Security if you trust this build. Do not disable Gatekeeper globally.
+
+Included: WireGuard import/edit/duplicate/delete/redacted export, named HTTPS DNS resolvers, Keychain storage, resolver tests and current-network diagnostics.
+
+This preview does not establish a VPN or change system DNS. The compiled VPN system-extension variant is packaged separately. Provisioned signing and live packet-path verification remain pending. Neither DNS routing order is active in this preview.
+
+App metadata: ~/Library/Application Support/VayuSetu
+Secrets: this Mac's Keychain
+Remove saved profiles and resolvers inside the app to delete their keys before uninstalling.
