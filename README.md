@@ -13,16 +13,6 @@ VayuSetu is a VPN client, encrypted-DNS app and ad blocker for iPhone and Mac. I
 
 It has no accounts, no analytics and no tracking. Everything it knows about you stays on your device.
 
-## Screenshots
-
-<p align="center">
-  <img src="assets/screenshots/iphone-home.png" width="190" alt="Home: one power button, three protection switches, live speed and activity">
-  <img src="assets/screenshots/iphone-settings.png" width="190" alt="Settings">
-  <img src="assets/screenshots/iphone-checks.png" width="190" alt="Checks">
-  <img src="assets/screenshots/iphone-adblock-test.png" width="190" alt="Adblock test">
-</p>
-<p align="center"><img src="assets/screenshots/mac-home.png" width="640" alt="VayuSetu on the Mac"></p>
-
 ## Download and install
 
 | Platform | Requirements | Status |
@@ -38,66 +28,164 @@ It has no accounts, no analytics and no tracking. Everything it knows about you 
 
 The download page lists a SHA-256 checksum for the DMG, so you can confirm that the file is intact: `shasum -a 256 VayuSetu-1.0-13-macOS.dmg`.
 
-## What you can do with it
+## A tour of the app
 
-### One power button, three protections
+Every picture below is a real screenshot of VayuSetu, with an explanation beside it.
 
-Home has a single power button and three switches that you can combine as you like:
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-home.png" width="240" alt="Home: one button, three protections"></td>
+<td valign="top">
 
-- **VPN** — tunnel your traffic through a WireGuard or IKEv2 server.
-- **DNS** — send your lookups to an encrypted resolver, with optional filtering.
-- **Adblock** — turn on the Safari content blockers.
+### Home: one button, three protections
 
-You can also pick a ready-made mode: **VPN + DNS**, **VPN only**, **DNS only** (no VPN server required) or **Adblock only**. A switch turns green only when VayuSetu has observed evidence that it is working, not merely because you asked for it.
+The big power button starts and stops protection. Under it are three switches that you can combine freely:
+
+- **VPN** tunnels your traffic through your WireGuard or IKEv2 server.
+- **DNS** sends your lookups to an encrypted resolver, with filtering if you want it.
+- **Adblock** turns on the Safari content blockers.
+
+Tap the mode name to pick a ready-made combination: **VPN + DNS**, **VPN only**, **DNS only** (no VPN server needed) or **Adblock only**. A switch turns green only when VayuSetu has seen evidence that it works, never just because you asked for it. Below the button you get the session timer, live **download and upload speed** and a seven-day **activity** chart of the requests VayuSetu's DNS filtering handled and blocked.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-add-profile.png" width="240" alt="Bring your own VPN"></td>
+<td valign="top">
 
 ### Bring your own VPN
 
-- Import a **WireGuard** configuration from a file, the clipboard or a **QR code**, or type the settings in by hand. Export a profile as a QR code to set up another device.
-- Add an **IKEv2/IPsec** server using Apple's native adapter.
-- Keep several profiles and switch between them. A **backup VPN profile** can be tried automatically, once, if the main one fails to connect.
-- Private keys and credentials are stored in the system Keychain.
-- OpenVPN is not supported at the moment.
+VayuSetu does not sell VPN service. **Add a profile** accepts the server you already have:
 
-### Encrypted DNS
+- **Import** a WireGuard file, a copied configuration from the clipboard, or scan a **QR code**.
+- **Set up manually** with WireGuard, or add an **IKEv2/IPsec** server that uses Apple's native adapter.
+- Keep several profiles and switch between them. You can also choose a **backup profile** that VayuSetu tries once if the main one fails to connect.
 
-- **DNS-over-HTTPS** and **DNS-over-TLS**, with the resolver of your choice (for example NextDNS or Control D), or the built-in **VayuSetu DNS**.
-- **DNS only mode** runs a small local DNS tunnel on the device, so you get encrypted, filtered DNS without a VPN server.
-- A **backup resolver** is asked only when the main one does not answer. It is always encrypted, and VayuSetu never falls back to plain DNS.
-- A local cache speeds up repeated lookups, and **CNAME uncloaking** checks the names that a site hides behind, so a tracker cannot slip through by wearing a harmless-looking alias.
+Private keys and passwords go into the system Keychain, and configurations stay on the device. OpenVPN is not supported at the moment.
 
-### Ad and tracker blocking
+</td>
+</tr>
+</table>
 
-- **Six Safari content blockers** — ads, privacy, security, social, annoyances and your own rules — so you can enable only the categories you want.
-- **DNS-level blocking** with the same lists, which also covers apps outside Safari that use the system DNS.
-- Three filtering levels, **Light**, **Balanced** and **Strict**, plus a catalogue of well-known filter lists you can switch on, your own list URLs, and **custom rules** with allow and block actions.
-- A built-in **adblock test** requests real ad, tracker and analytics hosts, with and without your rules, and reports how many were blocked. It keeps a history so you can compare modes.
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-confirm.png" width="240" alt="Clear confirmations"></td>
+<td valign="top">
+
+### Clear confirmations
+
+Anything that could interrupt your connection or delete something asks first, in the same slide-up sheet. The button says exactly what will happen (here, "Switch Profile"), destructive actions such as deleting a profile are red, and **Cancel** is always one tap away. You can also tap outside the sheet or drag it down to dismiss it.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-filtering.png" width="240" alt="Filtering settings"></td>
+<td valign="top">
+
+### Filtering settings
+
+Choose how aggressive blocking should be with three levels: **Light**, **Balanced** and **Strict**. Underneath, plain-language switches turn real blocklists on or off: ads, tracking scripts, fingerprinting, telemetry, scams and ransomware, malicious sites, mining scripts, social buttons and cookie banners. The same rules go to Safari's content blockers and, when DNS is on, to DNS filtering. The status card says whether the rules were actually applied.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-catalogue.png" width="240" alt="A catalogue of filter lists"></td>
+<td valign="top">
+
+### A catalogue of filter lists
+
+Add well-known lists with one tap, such as HaGeZi, OISD, AdGuard DNS filter, StevenBlack, Dan Pollock's hosts and EasyList. Each one shows its size and what it is for, and whether you have added or enabled it. You can also add your own list by URL, import a file, and write **custom rules** that always allow or block a domain.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-safari.png" width="240" alt="Six Safari content blockers"></td>
+<td valign="top">
+
+### Six Safari content blockers
+
+Safari limits how many rules one extension may hold, so VayuSetu splits blocking across six extensions: **Ads, Privacy, Security, Social, Annoyances and Custom**. This screen shows, for each one, whether it is on in Safari, how many rules it holds, how much memory they take and when Safari last loaded them. You can rebuild all of them, or reload a single one, from here.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-adblock-test.png" width="240" alt="Adblock test"></td>
+<td valign="top">
+
+### Adblock test
+
+Does it really work? The test requests real ad, tracker and analytics hosts twice, once without your rules and once with them, and reports how many were blocked, per category. Switch the filtering level, Safari blocking or VayuSetu DNS and test again, and the **Past tests** list lets you compare results over time. It is careful about unreachable hosts, so a site that is simply down is not counted as blocked.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-checks.png" width="240" alt="Checks that are honest about their limits"></td>
+<td valign="top">
 
 ### Checks that are honest about their limits
 
-The **Checks** screen reads what the system and the tunnel report: whether the tunnel is up, when the last WireGuard handshake happened, whether your DNS lookups are reaching the tunnel, your public IPv4 and IPv6 addresses, DNS resolution through your chosen resolver, and whether a known ad name is actually refused. Each result says what it observed, and the screen states what no app can prove, such as the absence of leaks from other apps. It never calls something "verified" because a setting was accepted. A manual **speed test** and a connection-quality test are included too.
+**Run Available Checks** looks at what is really running: whether the tunnel is healthy, when the last WireGuard handshake happened, your public IPv4 and IPv6 addresses, whether DNS lookups reach the tunnel, DNS resolution through your resolver, and whether a known ad domain is refused. Every row says what was observed, and the screen is clear about what no app can prove, such as the absence of leaks from other apps. There is also a manual **speed test**, a connection-quality test and a traffic view.
 
-### Privacy Lock and connection rules
+</td>
+</tr>
+</table>
 
-- **Strict routing** keeps traffic inside the tunnel and can reconnect automatically with on-demand rules.
-- **Trusted Wi-Fi** networks can be exempted from those rules.
-- **Emergency reset** removes VayuSetu's VPN and DNS configuration in one step if something goes wrong.
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-privacy-lock.png" width="240" alt="Privacy Lock"></td>
+<td valign="top">
 
-### Made for iPhone
+### Privacy Lock
 
-- **Dynamic Island and Lock Screen notifications** announce VPN connected or disconnected, DNS-only connected, and Adblock activated.
-- **Widget, Control Center controls and Shortcuts** let you switch protection on and off without opening the app (Control Center controls need iOS 18).
-- Haptic feedback on every button and switch, and a dark interface designed around one-handed use.
+**Privacy Lock** keeps your traffic inside the tunnel: strict routing, connect on demand, automatic reconnect and an optional requirement for a dual-stack WireGuard profile. **Trusted Wi-Fi** networks can be exempted when Privacy Lock is off. If something goes wrong, **Temporarily Relax Privacy Lock** and **Emergency Reset** are right there. It says plainly that Privacy Lock is not an absolute kill switch, because iOS keeps some exceptions of its own.
 
-### Made for Mac
+</td>
+</tr>
+</table>
 
-- A native SwiftUI app with a sidebar for Home, VPN Profiles, Encrypted DNS, Adblock and Settings.
-- A **menu-bar** control for connecting and disconnecting.
-- The WireGuard tunnel runs as a system extension, signed and notarized by Apple.
+<table>
+<tr>
+<td width="260" valign="top"><img src="assets/screenshots/iphone-settings.png" width="240" alt="Settings and notifications"></td>
+<td valign="top">
 
-### Your data
+### Settings and notifications
 
-- Encrypted **backup and restore** of your profiles and settings, protected by a password you choose.
-- A local, optional connection log and traffic history. You can clear them at any time. Nothing is uploaded.
+Permissions, protection modes, Privacy Lock and connection rules, connect on launch and automatic reconnect. **Dynamic Island notifications** briefly announce VPN connected or disconnected, DNS-only connected, and Adblock activated, and **Connection notifications** do the same as normal notifications. The same screen leads to appearance and accessibility, Checks, logs, backup and restore, and the security centre. There are also a widget, Control Center controls (iOS 18) and Shortcuts for switching protection without opening the app.
+
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="420" valign="top"><img src="assets/screenshots/mac-home.png" width="400" alt="VayuSetu for Mac"></td>
+<td valign="top">
+
+### VayuSetu for Mac
+
+The Mac app has the same engine with a desktop layout: a sidebar for **Home, VPN Profiles, Encrypted DNS, Adblock and Settings**, the connection stack (profile, resolver and routing mode), connection checks, and live network, download and upload tiles. A **menu-bar** control connects and disconnects, and the WireGuard tunnel runs as a system extension signed and notarized by Apple.
+
+</td>
+</tr>
+</table>
 
 ## Privacy
 
