@@ -302,6 +302,7 @@ struct VSDNSScreen: View {
                     Toggle("Resolve outside the VPN", isOn: $store.dnsUpstreamDirect).disabled(tunnel.running || tunnel.busy)
                         .accessibilityIdentifier("DNSUpstreamDirect")
                 } footer: {
+                    if store.dnsUpstreamDirect { Label(store.strictRouting ? "Privacy Lock is on, but the resolver connection leaves the VPN. Your ISP or network can see which resolver you use, though not the lookups." : "The resolver connection leaves the VPN. Your ISP or network can see which resolver you use, though not the lookups.", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
                     Text(tunnel.running && tunnel.protocolName == "IKEv2"
                          ? "This connection is Apple’s system IKEv2. Its DNS packets never reach VayuSetu, so the lists cannot be applied. Use a WireGuard profile or DNS Only for filtering."
                          : "Enabled lists are applied on this device to every DNS query while VayuSetu DNS is running, with DNS Only or a WireGuard VPN. Add HaGeZi, OISD, AdGuard or StevenBlack lists there. Anything you allow overrides a list. With a VPN, filtered DNS goes through the VPN unless you turn on ‘Resolve outside the VPN’ (use it only if names stop resolving).")
