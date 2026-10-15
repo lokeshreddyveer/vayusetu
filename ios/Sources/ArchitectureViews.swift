@@ -75,27 +75,8 @@ struct VSHomeActions: View {
     @ObservedObject var filtering: FilteringController
     init(store: AppStore, tunnel: TunnelController, network: NetworkDiagnostics) { self.store = store; self.tunnel = tunnel; self.network = network; filtering = store.filtering }
     var body: some View {
-        #if os(iOS)
         homeActions
-        #else
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(spacing: 0) {
-                NavigationLink { VSChecksScreen(store: store, tunnel: tunnel, network: network) } label: { VSRow(title: "Run Checks", subtitle: "On-demand IP, DNS and route observations", icon: "waveform.path.ecg", chevron: true) }
-                Divider().padding(.vertical, 8)
-                NavigationLink { VSProfilesScreen(store: store, tunnel: tunnel) } label: { VSRow(title: "Switch Profile", icon: "point.3.connected.trianglepath.dotted", chevron: true) }
-                Divider().padding(.vertical, 8)
-                NavigationLink { VSConnectionDetailsScreen(store: store, tunnel: tunnel) } label: { VSRow(title: "Connection Details", icon: "info.circle", chevron: true) }
-            }.buttonStyle(VSPlainButtonStyle()).padding(12).background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 12) {
-                Text("RECENT ACTIVITY").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                if filtering.events.isEmpty { Text("No recent activity").font(.subheadline).foregroundStyle(.secondary) }
-                ForEach(Array(filtering.events.prefix(3).enumerated()), id: \.offset) { _, event in Text(event).font(.caption).foregroundStyle(.secondary) }
-                NavigationLink { VSActivityScreen(filtering: filtering, tunnel: tunnel) } label: { Text("View All Activity").font(.subheadline.weight(.medium)) }
-            }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
-        }
-        #endif
     }
-    #if os(iOS)
     private var recent: [HomeActivitySummary] {
         let privacy = filtering.recentEvents.compactMap { HomeActivitySummary.privacy($0) }
         let connections = tunnel.structuredEvents.compactMap { HomeActivitySummary.connection($0) }
@@ -140,7 +121,6 @@ struct VSHomeActions: View {
         }
     }
     private func sectionTitle(_ title: String) -> some View { Text(title).font(.caption.weight(.semibold)).tracking(1).foregroundStyle(.secondary) }
-    #endif
 }
 
 /// Fixed summaries prevent raw diagnostic detail from reaching the Home dashboard.

@@ -11,9 +11,7 @@ struct VSHomeScreen: View {
     var connect: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
-    #if os(iOS)
     @StateObject private var live = LiveDeviceSpeed()
-    #endif
     @State private var showingModes = false
     @Environment(\.openProfilesTab) private var openProfilesTab
     @State private var modeSheetConnects = false
@@ -30,35 +28,21 @@ struct VSHomeScreen: View {
                 #else
                 Text("Your private connection, on your terms.").font(.subheadline).foregroundStyle(.secondary)
                 #endif
-                #if os(macOS)
-                if geometry.size.width >= 700 {
-                    HStack(alignment: .top, spacing: 20) { hero; configuration }
-                } else { VStack(spacing: 20) { hero; configuration } }
-                #else
                 hero
                 sessionAndTraffic
                 VSHomeActivity(filtering: store.filtering)
-                #endif
-                #if os(macOS)
-                if connected {
-                    HStack(spacing: 20) { metric("Downloaded", bytes(tunnel.stats?.received)); metric("Uploaded", bytes(tunnel.stats?.sent)); TimelineView(.periodic(from: .now, by: 1)) { _ in metric("Duration", tunnel.duration) } }.padding(14).background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
-                }
-                if connected {
-                    HStack(spacing: 16) { metric("Download / sec", rate(tunnel.receivedPerSecond)); metric("Upload / sec", rate(tunnel.sentPerSecond)) }.padding(12).background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 16))
-                }
-                #endif
                 VSProtectionGrid(store: store, tunnel: tunnel)
                 VSHomeActions(store: store, tunnel: tunnel, network: network)
                 if !tunnel.message.isEmpty { Label(tunnel.message, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.orange) }
                 if !store.protectionNotice.isEmpty { Label(store.protectionNotice, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("HomeProtectionNotice") }
                 if !TunnelController.available { Text("VPN connections require the signed VPN build. Profiles and diagnostics remain available.").font(.footnote).foregroundStyle(.secondary) }
-            }.padding(16).frame(width: geometry.size.width).frame(maxWidth: .infinity)
+            }.padding(16).frame(maxWidth: 820).frame(width: geometry.size.width)
         }.scrollIndicators(.hidden).background(VSDesign.background) }
-        #if os(iOS)
         .sheet(isPresented: $showingModes) { VSProtectionModeSheet(store: store, connectsAfterChoosing: modeSheetConnects).vsDialogHost().vsSheetChrome([.fraction(0.86), .large]) }
+        #if os(iOS)
         .navigationTitle("").toolbar(.hidden, for: .navigationBar)
         #else
-        .navigationTitle("VayuSetu").toolbar { ToolbarItem { NavigationLink { VSSettingsScreen(store: store, tunnel: tunnel) } label: { Image(systemName: "gearshape").accessibilityLabel("Open Settings") } } }
+        .navigationTitle("Overview")
         #endif
         )
     }
@@ -83,7 +67,6 @@ struct VSHomeScreen: View {
         }.padding(.top, 12).accessibilityIdentifier("HomeHeader")
     }
     #endif
-    #if os(iOS)
     private var sessionAndTraffic: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let timer = connected && tunnel.observedConnectedDate != nil ? tunnel.duration : "—:—:—:—"
@@ -150,8 +133,6 @@ struct VSHomeScreen: View {
             .background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(VSDesign.separator, lineWidth: 1))
     }
-    #endif
-    #if os(iOS)
     // Power button colour follows the observed network mode: gray off, teal DNS only, blue VPN only, green VPN + DNS.
     private var connectionAccent: Color {
         if !tunnel.ready { return .secondary }
@@ -292,27 +273,8 @@ struct VSHomeScreen: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(VSDesign.separator, lineWidth: 1))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: connectionLabel)
     }
-    #endif
     var hero: some View {
-        #if os(iOS)
         connectionCard
-        #else
-        VStack(spacing: 18) {
-            ZStack {
-                Circle().stroke(color.opacity(0.07), lineWidth: 1).frame(width: 206, height: 206)
-                Circle().stroke(color.opacity(0.16), lineWidth: 1).frame(width: 184, height: 184)
-                Button {
-                    if tunnel.running || tunnel.busy { Task { await tunnel.disconnect() } } else { connect() }
-                } label: { Image(systemName: "power").font(.system(size: 50, weight: .light)).foregroundStyle(color).frame(width: 154, height: 154).background(color.opacity(hovering ? 0.14 : 0.08), in: Circle()).overlay(Circle().stroke(color.opacity(0.35), lineWidth: 1)) }
-                .buttonStyle(VSPlainButtonStyle()).disabled(!TunnelController.available || !tunnel.ready)
-                .onHover { hovering = $0 }.accessibilityLabel(tunnel.running || tunnel.busy ? "Disconnect VPN" : "Connect VPN")
-                if tunnel.busy || tunnel.status == .connecting || tunnel.checkingHealth { ProgressView().offset(y: 106).accessibilityLabel("Connection in progress") }
-            }.padding(.top, 10)
-            HStack(spacing: 7) { Circle().fill(color).frame(width: 7, height: 7); Text(tunnel.statusText).font(.title3.weight(.semibold)) }
-            Text(connected ? "Tunnel established · protection verification pending" : "Choose your profile and resolver, then connect.").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            Text("WireGuard").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-        }.padding(16).frame(maxWidth: .infinity).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: connected)
-        #endif
     }
     var configuration: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -667,7 +629,6 @@ private struct VSNetworkCoverageScreen: View {
     }
 }
 
-#if os(iOS)
 /// A code-native power mark with rounded terminals at every display scale.
 private struct VSHomePowerMark: Shape {
     func path(in rect: CGRect) -> Path {
@@ -680,9 +641,7 @@ private struct VSHomePowerMark: Shape {
         return path
     }
 }
-#endif
 
-#if os(iOS)
 /// Compact mode selector. Choosing while protection is off only saves the next start-up mode, unless the sheet was opened by a
 /// first power tap. Choosing while protection is on offers "Switch Now" or "Use Next Time".
 struct VSProtectionModeSheet: View {
@@ -780,9 +739,7 @@ struct VSProtectionModeSheet: View {
         }
     }
 }
-#endif
 
-#if os(iOS)
 /// This device's own Wi-Fi/cellular speed, sampled once a second while Home is on screen. Reads local interface counters only; nothing is sent anywhere.
 @MainActor final class LiveDeviceSpeed: ObservableObject {
     @Published private(set) var down: Double?
@@ -801,4 +758,3 @@ struct VSProtectionModeSheet: View {
         }
     }
 }
-#endif

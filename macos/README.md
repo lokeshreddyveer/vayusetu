@@ -1,4 +1,4 @@
-# VayuSetu for macOS — 1.0 (build 13)
+# VayuSetu for macOS — 1.0 (build 14)
 
 Native SwiftUI app for macOS 14+, with universal Apple Silicon and Intel binaries. Working folder: ~/Documents/VayuSetu/macos.
 

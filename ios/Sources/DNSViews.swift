@@ -53,10 +53,8 @@ struct VSDNSScreen: View {
         .vsHeader("Encrypted DNS").searchable(text: $search, prompt: "Search resolvers")
         .toolbar { ToolbarItem { Button { draft = VSResolverDraft(name: "", endpoint: "") } label: { Image(systemName: "plus").accessibilityLabel("Add resolver") }.disabled(locked) } }
         #endif
-        #if os(iOS)
         .navigationDestination(isPresented: $showingMode) { VSModeScreen(store: store, tunnel: tunnel) }
         .navigationDestination(isPresented: $showingVerification) { VSVerificationScreen(store: store, tunnel: tunnel, network: overviewNetwork) }
-        #endif
         .navigationDestination(isPresented: $showingAdvanced) { advancedSettings }
         .navigationDestination(isPresented: $showingResolvers) { resolverLibrary }
         .sheet(isPresented: $showingActivation) { activationGuide.vsSheetChrome([.medium, .large]) }
@@ -277,27 +275,20 @@ struct VSDNSScreen: View {
         return AnyView(iosOverview)
         #endif
     }
-    #if os(iOS)
     private var iosOverview: some View { dashboard }
-    #endif
     var resolverList: some View {
         List {
-            #if os(iOS)
             VSFormSection {
                 dnsHeader.listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
                     .listRowBackground(Color.clear).listRowSeparator(.hidden)
             }
-            #endif
-            #if os(iOS)
             VSFormSection {
                 dnsStatusCard.listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     .listRowBackground(Color.clear).listRowSeparator(.hidden)
             }
-            #endif
             if tunnel.running && tunnel.protocolName == "IKEv2" {
                 VSFormSection { Text("IKEv2 uses server-managed DNS. The encrypted resolver selected below is not applied by the native adapter.").font(.footnote).foregroundStyle(.orange) }
             }
-            #if os(iOS)
             VSFormSection("Protection modes") {
                 NavigationLink { VSModeScreen(store: store, tunnel: tunnel) } label: {
                     VSRow(title: "Protection modes", subtitle: "Which mode the power button starts", icon: "arrow.triangle.branch", value: store.savedModeTitle).frame(minHeight: 26)
@@ -329,15 +320,6 @@ struct VSDNSScreen: View {
                     Text("Apple’s IKEv2 takes its DNS from the VPN server, and iOS ignores the encrypted resolver you choose here while it is connected. To use \(store.dnsName.isEmpty ? "your resolver" : store.dnsName) or the filter lists: ask your VPN provider to use that DNS, use a WireGuard profile, or turn the VPN pill off to run DNS Only.")
                 }
             }
-            #else
-            VSFormSection {
-                VSRow(title: "OS encrypted DNS-only", subtitle: "No VPN interface · OS DoH/DoT configuration", icon: "network", value: systemDNS.snapshot().label)
-                Button("Enable Encrypted DNS-only") { Task { await systemDNS.enable(endpoint: store.endpoint, bootstrap: store.bootstrapAddresses) } }.disabled(locked || systemDNS.busy || store.endpoint.isEmpty)
-                Button("Use System DNS / Disable DNS-only") { Task { await systemDNS.disable() } }.disabled(locked || systemDNS.busy)
-                if !systemDNS.message.isEmpty { Text(systemDNS.message).font(.footnote).foregroundStyle(.secondary) }
-            } header: { Text("DNS mode") } footer: { Text("DNS-only provides no VPN tunnel. WireGuard uses the selected resolver; IKEv2 uses server-managed DNS.") }
-            #endif
-            #if os(iOS)
             VSFormSection("Current configuration") {
                 VSRow(title: "Resolver", value: observedResolver)
                 VSRow(title: "Protocol", value: configuredTransport)
@@ -345,14 +327,11 @@ struct VSDNSScreen: View {
                 VSRow(title: "DNS verification", value: "Behavior not verified")
                 VSRow(title: "Last behavior check", value: "No current evidence")
             }
-            #endif
             VSFormSection {
-                #if os(iOS)
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search resolvers", text: $search).autocorrectionDisabled()
                 }.frame(minHeight: 26)
-                #endif
                 ForEach(matchingResolvers) { resolver in
                     Button {
                         #if os(macOS)
@@ -363,17 +342,13 @@ struct VSDNSScreen: View {
                     } label: { VSRow(title: resolver.name, subtitle: store.selectedDNS == resolver.id ? DNSService.transport(store.endpoint) : "Encrypted resolver", icon: "network", selected: store.selectedDNS == resolver.id) }.buttonStyle(VSPlainButtonStyle())
                         .listRowBackground(store.selectedDNS == resolver.id ? VSDesign.accent.opacity(0.08) : VSDesign.surface)
                         .contextMenu { Button("Edit Resolver") { edit(resolver) }.disabled(locked) }
-                        #if os(iOS)
                         .disabled(locked)
-                        #endif
                 }
                 if store.dnsProfiles.isEmpty { Text("Add your provider’s encrypted DNS endpoint.").foregroundStyle(.secondary) }
                 else if matchingResolvers.isEmpty { ContentUnavailableView.search(text: search) }
-                #if os(iOS)
                 Button { draft = VSResolverDraft(name: "", endpoint: "") } label: {
                     Label("Add Custom Resolver", systemImage: "plus").frame(minHeight: 26)
                 }.disabled(locked).accessibilityLabel("Add resolver")
-                #endif
             } header: { Text("Resolvers") } footer: { if locked { Text(systemDNS.busy ? "Wait for the DNS operation to finish." : store.testing ? "Wait for the DNS check to finish." : "Disconnect to change resolvers.") } }
             if !store.endpoint.isEmpty {
                 VSFormSection {
@@ -522,7 +497,6 @@ struct VSDNSDiagnosticsScreen: View {
     }
 }
 
-#if os(iOS)
 private extension DNSManagementMode {
     var icon: String {
         switch self { case .system: "network"; case .encrypted: "globe"; case .vpn: "point.3.connected.trianglepath.dotted" }
@@ -536,9 +510,7 @@ private extension DNSManagementMode {
     }
 }
 
-#endif
 
-#if os(iOS)
 // MARK: - DNS dashboard. The view only draws `DNSDashboardModel`; facts come from the shared coordinator state.
 private enum DashboardMetrics {
     static let screenInset: CGFloat = 16
@@ -829,4 +801,3 @@ extension VSDNSScreen {
         }
     }
 }
-#endif

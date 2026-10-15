@@ -255,6 +255,9 @@ struct VSCardList<Content: View>: View {
                 .buttonStyle(VSRowButtonStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 110)    // clears the floating tab bar, so the last row can be reached and tapped
+                #if os(macOS)
+                .frame(maxWidth: 880).frame(maxWidth: .infinity)    // on the Mac the pushed pages stay a readable width, centred
+                #endif
         }.scrollIndicators(.hidden).vsScreenBackground().scrollDismissesKeyboard(.interactively)
     }
 }
@@ -560,10 +563,19 @@ private struct VSDialogRequester: ViewModifier {
         VSDialogCenter.shared.present(VSDialogRequest(id: id, tone: tone, icon: icon ?? tone.icon, title: title, message: message, actions: actions, finished: { binding.wrappedValue = false }))
     }
     func body(content: Content) -> some View {
+        #if os(macOS)
+        // The Mac uses the system alert: a centred, native dialog rather than the phone's slide-up sheet.
+        content.alert(title, isPresented: $isPresented) {
+            ForEach(actions) { action in
+                Button(action.title, role: action.kind == .destructive ? .destructive : action.kind == .cancel ? .cancel : nil) { action.run() }
+            }
+        } message: { if !message.isEmpty { Text(message) } }
+        #else
         content
             .onChange(of: isPresented) { _, now in if now { show() } else { VSDialogCenter.shared.withdraw(id) } }
             .onAppear { if isPresented { show() } }
             .onDisappear { if isPresented { VSDialogCenter.shared.withdraw(id); isPresented = false } }
+        #endif
     }
 }
 extension View {
@@ -662,3 +674,14 @@ extension View {
         #endif
     }
 }
+
+// MARK: - Platform image
+#if os(iOS)
+typealias PlatformImage = UIImage
+extension PlatformImage { static func make(_ cg: CGImage) -> PlatformImage { UIImage(cgImage: cg) } }
+extension Image { init(platformImage: PlatformImage) { self.init(uiImage: platformImage) } }
+#else
+typealias PlatformImage = NSImage
+extension PlatformImage { static func make(_ cg: CGImage) -> PlatformImage { NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)) } }
+extension Image { init(platformImage: PlatformImage) { self.init(nsImage: platformImage) } }
+#endif

@@ -59,9 +59,7 @@ struct VSProtectionGrid: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             VStack(alignment: .leading, spacing: 12) {
-                #if os(iOS)
                 Text("PROTECTION STATUS").font(.caption.weight(.semibold)).tracking(1).foregroundStyle(.secondary)
-                #endif
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                     ForEach(ProtectionSubsystem.allCases, id: \.self) { subsystem in
                         let snapshot = store.protection(subsystem, now: context.date)
@@ -78,17 +76,12 @@ struct VSProtectionGrid: View {
         }
     }
     private var columns: [GridItem] {
-        #if os(iOS)
         Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: dynamicTypeSize >= .xLarge ? 2 : 4)
-        #else
-        [GridItem(.flexible()), GridItem(.flexible())]
-        #endif
     }
     private func title(_ subsystem: ProtectionSubsystem) -> String {
         switch subsystem { case .vpn: "VPN"; case .dns: "DNS"; case .safari: "Safari"; case .adblock: "Adblock" }
     }
     @ViewBuilder private func tile(_ subsystem: ProtectionSubsystem, snapshot: ProtectionSnapshot) -> some View {
-        #if os(iOS)
         VStack(spacing: 6) {
             VSPrivacyGlyph(subsystem: subsystem).foregroundStyle(.secondary).frame(height: 18)
             Text(title(subsystem)).font(.caption.weight(.semibold)).foregroundStyle(.primary)
@@ -99,13 +92,6 @@ struct VSProtectionGrid: View {
         }.padding(.vertical, 10).padding(.horizontal, 6).frame(maxWidth: .infinity, minHeight: 82, alignment: .top)
             .background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(VSDesign.separator, lineWidth: 1))
-        #else
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { VSPrivacyGlyph(subsystem: subsystem).foregroundStyle(snapshot.tint); Spacer(); Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
-            Text(title(subsystem)).font(.subheadline.weight(.semibold))
-            Text(snapshot.label).font(.caption).foregroundStyle(snapshot.tint).fixedSize(horizontal: false, vertical: true)
-        }.padding(12).frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading).background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 16))
-        #endif
     }
     @ViewBuilder private func detail(_ subsystem: ProtectionSubsystem) -> some View {
         switch subsystem {
@@ -436,7 +422,6 @@ import UIKit
 }
 #endif
 
-#if os(iOS)
 // MARK: - Shared activity UI (Home and Adblock read the same series from the same repository)
 /// The reporting period is one setting shared by Home and Adblock, remembered until the user changes it.
 enum ActivityPeriodStore { static let key = "activity.period" }
@@ -550,9 +535,7 @@ struct VSHomeActivity: View {
         }.frame(maxWidth: .infinity)
     }
 }
-#endif
 
-#if os(iOS)
 /// Domain-level history is off by default and VayuSetu does not collect it yet, so rankings show an honest empty state.
 struct VSDomainRankingScreen: View {
     enum Kind { case active, blocked }
@@ -578,7 +561,6 @@ struct VSDomainRankingScreen: View {
             .vsConfirm(isPresented: $confirmClear, title: "Clear activity statistics?", message: "Counts and rankings on this screen start again from zero.", confirm: "Clear", destructive: true, icon: "trash.fill") { filtering.clearActivity() }
     }
 }
-#endif
 
 /// One user-facing filtering feature. `lists` are real catalogue entries; a feature with no lists cannot be expressed as Safari
 /// URL rules and is shown as unavailable instead of pretending to work.
@@ -1141,7 +1123,6 @@ struct VSAdblockTestScreen: View {
     }
 }
 
-#if os(iOS)
 /// DNS activity: requests and blocks that VayuSetu DNS filtering observed. Lives on the DNS tab because only DNS filtering can count them.
 struct VSActivityDashboard: View {
     @ObservedObject var filtering: FilteringController
@@ -1194,7 +1175,6 @@ struct VSActivityDashboard: View {
         }.frame(minHeight: 44).contentShape(Rectangle())
     }
 }
-#endif
 
 // Live, widely blocked ad, tracker, analytics and telemetry hosts, plus ad-script URLs. Sources: hosts that at least five public blocklists agree on, and the hosts and scripts
 // used by the public ad-block test pages (adblock.turtlecute.org, obfusgated.com, getblockify.com, adblock-tester.com, superadblocktest.com), with duplicates removed.

@@ -26,10 +26,15 @@ struct MenuControls: View {
         Text("VayuSetu · \(tunnel.statusText)")
         Text(store.active?.name ?? "No VPN profile selected")
         Divider()
-        Button(tunnel.running || tunnel.busy ? "Disconnect" : "Connect") {
-            if tunnel.running || tunnel.busy { Task { await tunnel.disconnect() } }
-            else { extensions.activate { store.connect() } }
-        }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Button(store.networkActive ? "Turn protection off" : "Turn protection on") {
+            if store.networkActive { Task { _ = await store.powerTapped() } }
+            else { extensions.activate { Task { if await store.powerTapped() { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } } } }
+        }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting || store.protectionBusy)
+        Divider()
+        Toggle("VPN", isOn: Binding(get: { store.vpnPill == .active || store.vpnPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.vpn) } } })).disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle("Encrypted DNS", isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.dns) } } })).disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle("Adblock in Safari", isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { _ in Task { await store.togglePill(.adblock) } }))
+        Divider()
         Button("Open VayuSetu") { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) }
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }

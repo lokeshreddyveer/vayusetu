@@ -456,7 +456,7 @@ struct InterfaceSpeedMeter {
         var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let entry = cursor {
             let name = String(cString: entry.pointee.ifa_name)
-            if entry.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), name == "en0" || name.hasPrefix("pdp_ip"), let raw = entry.pointee.ifa_data {
+            if entry.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), name.hasPrefix("en") || name.hasPrefix("pdp_ip"), let raw = entry.pointee.ifa_data {
                 let data = raw.assumingMemoryBound(to: if_data.self).pointee
                 received += UInt64(data.ifi_ibytes); sent += UInt64(data.ifi_obytes)
             }

@@ -13,7 +13,7 @@ enum Page: String, CaseIterable, Identifiable {
     @StateObject private var extensions = ExtensionManager()
     @AppStorage("appearance") private var appearance = "dark"
     var body: some Scene {
-        WindowGroup("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
+        WindowGroup("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions).frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
         MenuBarExtra("VayuSetu", systemImage: "wind") { MenuControls(store: store, extensions: extensions) }
         .commands { CommandGroup(replacing: .appInfo) { Button("About VayuSetu") { NSApplication.shared.orderFrontStandardAboutPanel(options: [.applicationName: "VayuSetu", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown", .credits: NSAttributedString(string: "By R3dby · Native VPN and encrypted DNS control center")]) } } }
     }
@@ -44,9 +44,9 @@ struct DesktopView: View {
                     VStack(spacing: 12) { ForEach(Page.primary) { page in Button { selection = page } label: { Image(systemName: page.icon).font(.title3).frame(width: 44, height: 44).background(selection == page ? VSDesign.accent.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 10)) }.buttonStyle(.plain).help(page.rawValue).accessibilityLabel(page.rawValue).foregroundStyle(selection == page ? VSDesign.accent : .secondary) }; Spacer() }.padding(10).background(.regularMaterial)
                     Divider()
                 }
-                NavigationStack { content }
+                NavigationStack { content }.environment(\.openDNSTab, { selection = .dns }).environment(\.openAdblockTab, { selection = .adblock }).environment(\.openProfilesTab, { selection = .profiles }).environment(\.openChecksPage, { selection = .checks })
             }.background(VSDesign.background)
-        }.navigationSplitViewStyle(.balanced)
+        }.navigationSplitViewStyle(.balanced).vsDialogHost()
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: visibility)
         .alert("VayuSetu", isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } })) { Button("OK") { store.notice = "" } } message: { Text(store.notice) }
         .sheet(isPresented: $onboarding) { NavigationStack { VSOnboardingScreen(store: store) }.frame(minWidth: 520, minHeight: 580) }
@@ -81,13 +81,13 @@ struct DesktopView: View {
     }
     var content: AnyView {
         switch selection ?? .home {
-        case .home: AnyView(MacDashboard(store: store, tunnel: tunnel, network: network, connect: { extensions.activate { store.connect() } }))
-        case .profiles: AnyView(VSProfilesScreen(store: store, tunnel: tunnel))
-        case .dns: AnyView(VSDNSScreen(store: store, tunnel: tunnel))
-        case .adblock: AnyView(VSAdblockScreen(filtering: store.filtering, store: store))
+        case .home: AnyView(MacHome(store: store, tunnel: tunnel, network: network, activate: { extensions.activate(onReady: $0) }))
+        case .profiles: AnyView(MacProfiles(store: store, tunnel: tunnel, activate: { extensions.activate(onReady: $0) }))
+        case .dns: AnyView(MacDNS(store: store, tunnel: tunnel, activate: { extensions.activate(onReady: $0) }))
+        case .adblock: AnyView(MacAdblock(filtering: store.filtering, store: store))
         case .checks: AnyView(VSChecksScreen(store: store, tunnel: tunnel, network: network))
         case .logs: AnyView(VSLogsScreen(tunnel: tunnel))
-        case .settings: AnyView(VSSettingsScreen(store: store, tunnel: tunnel).toolbar { ToolbarItem { Menu("Mac Integration") { Toggle("Launch at login", isOn: Binding(get: { preferences.loginEnabled }, set: { preferences.setLogin($0) })); Button("Activate VPN Extension") { extensions.activate() }.disabled(extensions.requesting || !TunnelController.available) } } }.safeAreaInset(edge: .bottom) { if !extensions.message.isEmpty || !preferences.message.isEmpty { Text(extensions.message + "\n" + preferences.message).font(.footnote).foregroundStyle(.secondary).padding(16) } })
+        case .settings: AnyView(MacSettings(store: store, tunnel: tunnel, preferences: preferences))
         }
     }
 }

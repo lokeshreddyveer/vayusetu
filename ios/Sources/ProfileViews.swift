@@ -48,9 +48,7 @@ struct VSProfilesScreen: View {
     @State private var showingQRScanner = false
     @StateObject private var diagnosticsNetwork = NetworkDiagnostics()
     @State private var scannedConfiguration: String?
-    #if os(iOS)
     @State private var qrProfile: SavedProfile?
-    #endif
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.openProfilesTab) private var openProfilesTab
     @Environment(\.dismiss) private var dismiss
@@ -107,9 +105,7 @@ struct VSProfilesScreen: View {
             .sheet(item: $nativeExport) { item in NavigationStack { VSNativeProfileExportScreen(profile: item).vsSheetChrome([.medium, .large]).toolbar { ToolbarItem(placement: .cancellationAction) { VSCloseButton(label: "Done") { nativeExport = nil } } } } }
             .sheet(item: $manualDraft) { item in NavigationStack { VSManualProtocolEditor(store: store, original: item) }.vsDialogHost().vsSheetChrome() }
             .sheet(item: $draft) { item in NavigationStack { VSProfileEditor(store: store, tunnel: tunnel, draft: item) }.vsDialogHost().vsSheetChrome() }
-            #if os(iOS)
             .sheet(item: $qrProfile) { profile in NavigationStack { VSProfileQRScreen(name: profile.name, configuration: { try store.configuration(for: profile) }) }.vsSheetChrome([.large]) }
-            #endif
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "conf") ?? .plainText, .plainText]) { result in
                 do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } };
                     #if os(iOS)
@@ -130,16 +126,8 @@ struct VSProfilesScreen: View {
             .overlay(Circle().stroke(VSDesign.separator, lineWidth: 1))
     }
     @ViewBuilder private var addMenu: some View {
-        #if os(iOS)
         Button { showingAddProfile = true } label: { addLabel }
             .buttonStyle(VSPlainButtonStyle()).accessibilityLabel("Add profile").disabled(tunnel.busy || store.connectionOperation)
-        #else
-        Menu {
-            Button("New Profile", systemImage: "square.and.pencil") { edit(nil) }
-            Button("Import File", systemImage: "doc") { importing = true }
-            Button("Import from Clipboard", systemImage: "doc.on.clipboard") { importClipboard() }
-        } label: { addLabel }.buttonStyle(VSPlainButtonStyle()).accessibilityLabel("Add profile").disabled(tunnel.busy || store.connectionOperation)
-        #endif
     }
     private func importClipboard() {
         guard let text = VSDesign.clipboard(), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { store.notice = "No configuration found on the clipboard."; return }
@@ -169,7 +157,6 @@ struct VSProfilesScreen: View {
             addMenu
         }.padding(.top, 12)
     }
-    #if os(iOS)
     private var hasConnectionCard: Bool {
         tunnel.running || tunnel.busy || !tunnel.ready || tunnel.stage == .failed || tunnel.stage == .blocked || !tunnel.history.isEmpty
     }
@@ -277,19 +264,12 @@ struct VSProfilesScreen: View {
             HStack { Text("Details"); Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }.frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(VSActionStyle()).accessibilityIdentifier("ProfilesConnectionDetails")
     }
-    #endif
     var content: AnyView {
         if store.profiles.isEmpty && store.manualDrafts.isEmpty {
             return AnyView(VStack {
-                #if os(iOS)
                 profilesHeader.padding(.horizontal, 16)
-                #endif
                 ContentUnavailableView { Label("No profiles yet", systemImage: "square.stack.3d.up") } description: { Text("Import a WireGuard configuration from your VPN provider.") } actions: { Button("Add VPN Profile") {
-                    #if os(iOS)
                     showingAddProfile = true
-                    #else
-                    importing = true
-                    #endif
                 }.buttonStyle(.borderedProminent).vsTapHaptic().disabled(tunnel.busy || store.connectionOperation) }.background(VSDesign.background) }.background(VSDesign.background))
         }
         #if os(macOS)
@@ -303,7 +283,6 @@ struct VSProfilesScreen: View {
         return AnyView(iosProfileList)
         #endif
     }
-    #if os(iOS)
     private var iosProfileList: some View { profilesDashboard }
     private func rowStatus(_ profile: SavedProfile) -> String {
         if tunnel.configuredProfile == profile.id && tunnel.running { return tunnel.status == .connected ? "Connected" : tunnel.status == .disconnecting ? "Disconnecting" : "Connecting" }
@@ -352,10 +331,8 @@ struct VSProfilesScreen: View {
         }
         actions(profile)
     }
-    #endif
     var profileList: some View {
         List {
-            #if os(iOS)
             VSFormSection { profilesHeader.listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20)).listRowBackground(Color.clear).listRowSeparator(.hidden) }
             if hasConnectionCard {
                 VSFormSection { activeConnectionCard.listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowBackground(Color.clear).listRowSeparator(.hidden) }
@@ -366,9 +343,7 @@ struct VSProfilesScreen: View {
                     TextField("Search profiles", text: $search).autocorrectionDisabled()
                 }.frame(minHeight: 44)
             }
-            #endif
             VSFormSection { Picker("Sort", selection: $sort) { Text("Recent").tag("Recent"); Text("Name").tag("Name"); Text("Last used").tag("Last used") } }
-            #if os(iOS)
             VSFormSection {
                 Button { store.selectNoVPNProfile() } label: {
                     VSRow(title: "No VPN profile", subtitle: "DNS only · local DNS tunnel, no VPN server", icon: "network", selected: store.dnsOnlyChosen)
@@ -377,7 +352,6 @@ struct VSProfilesScreen: View {
                 .listRowBackground(store.dnsOnlyChosen ? VSDesign.accent.opacity(0.08) : VSDesign.surface)
                 .accessibilityIdentifier("ProfileNoVPN")
             } footer: { Text("Unselects every VPN profile and uses only DNS protection. Pick a profile again to use a VPN. A connected VPN is disconnected.") }
-            #endif
             VSFormSection {
                 ForEach(items) { profile in
                     Button {
@@ -468,9 +442,7 @@ struct VSProfilesScreen: View {
     @ViewBuilder func actions(_ profile: SavedProfile) -> some View {
         Button("Edit / Rename", systemImage: "pencil") { edit(profile) }.disabled(store.profileInUse(profile) || tunnel.busy)
         Button("Duplicate", systemImage: "plus.square.on.square") { let active = store.selected; let native = store.selectedManualProfile; store.duplicate(profile); store.selected = active; store.selectedManualProfile = native }.disabled(tunnel.busy)
-        #if os(iOS)
         Button("Show QR Code", systemImage: "qrcode") { qrProfile = profile }
-        #endif
         Button("Export Redacted", systemImage: "square.and.arrow.up") { document = EncryptedBackupDocument(data: Data(store.redactedConfiguration(profile).utf8)); exporting = true }
         Button("Delete", systemImage: "trash", role: .destructive) { store.pendingDeletion = profile }.disabled(store.profileInUse(profile) || tunnel.busy)
     }
@@ -479,7 +451,6 @@ struct VSProfilesScreen: View {
         catch { store.notice = "Could not read the profile from Keychain." }
     }
 }
-#if os(iOS)
 struct VSAddProfileScreen: View {
     var select: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -524,7 +495,7 @@ struct VSAddProfileScreen: View {
             }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 30)
         }.scrollIndicators(.hidden)
             .toolbar { ToolbarItem(placement: .cancellationAction) { VSCloseButton(label: "Cancel") { dismiss() } } }
-            .navigationBarTitleDisplayMode(.inline)
+            .vsInlineTitle()
     }
     private func label(_ text: String) -> some View { Text(text.uppercased()).font(.caption.weight(.semibold)).tracking(1.1).foregroundStyle(.secondary).padding(.horizontal, 4) }
     private func tile(_ title: String, _ subtitle: String, icon: String, action: String) -> some View {
@@ -559,7 +530,6 @@ struct VSAddProfileScreen: View {
         else { content.accessibilityElement(children: .combine) }
     }
 }
-#endif
 struct VSProfileEditor: View {
     @ObservedObject var store: AppStore
     @ObservedObject var tunnel: TunnelController
@@ -765,7 +735,6 @@ struct VSNativeProfileExportScreen: View {
     }
 }
 
-#if os(iOS)
 import CoreImage.CIFilterBuiltins
 /// A profile as a QR code, to move it to another device. The code contains the private key, so it stays hidden until you ask for it,
 /// is hidden again as soon as the app is left, and is never saved or shared anywhere.
@@ -774,7 +743,7 @@ struct VSProfileQRScreen: View {
     let configuration: () throws -> String
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var failure = ""
     private func reveal() {
         do {
@@ -783,14 +752,14 @@ struct VSProfileQRScreen: View {
             let filter = CIFilter.qrCodeGenerator(); filter.message = Data(text.utf8); filter.correctionLevel = "L"
             guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
                   let cg = CIContext().createCGImage(output, from: output.extent) else { failure = "The QR code could not be made."; return }
-            image = UIImage(cgImage: cg); failure = ""
+            image = PlatformImage.make(cg); failure = ""
         } catch { failure = "The profile could not be read from Keychain." }
     }
     var body: some View {
         VSCardList {
             VSSection("Move “\(name)” to another device") {
                 if let image {
-                    Image(uiImage: image).interpolation(.none).resizable().scaledToFit().padding(14).background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Image(platformImage: image).interpolation(.none).resizable().scaledToFit().padding(14).background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .frame(maxWidth: .infinity).accessibilityLabel("QR code for the profile \(name)")
                     Button("Hide QR Code") { self.image = nil }
                 } else {
@@ -807,6 +776,7 @@ struct VSProfileQRScreen: View {
     }
 }
 
+#if os(iOS)
 private struct VSQRImportScreen: View {
     var accept: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -931,7 +901,6 @@ private struct VSQRScannerCamera: UIViewControllerRepresentable {
 }
 #endif
 
-#if os(iOS)
 // MARK: - Profiles dashboard. The view draws `ConnectionSummaryModel` and `ProfileRowModel`; selection is a preference, connection is observed.
 extension VSProfilesScreen {
     fileprivate var border: Color { VSDesign.separator }
@@ -1028,7 +997,7 @@ extension VSProfilesScreen {
             }
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search profiles", text: $search).autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextField("Search profiles", text: $search).autocorrectionDisabled().vsNoCapitalize()
                     .focused($searchFocused).submitLabel(.search).onSubmit { searchFocused = false }
                 if !search.isEmpty {
                     Button { search = ""; searchFocused = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }
@@ -1151,4 +1120,3 @@ extension VSProfilesScreen {
 private struct DotLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View { HStack(spacing: 6) { configuration.icon.font(.system(size: 6)); configuration.title } }
 }
-#endif
