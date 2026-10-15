@@ -3,10 +3,10 @@ import SwiftUI
 import VayuSetuCore
 
 enum Page: String, CaseIterable, Identifiable {
-    case home = "Home", profiles = "VPN Profiles", dns = "Encrypted DNS", adblock = "Adblock", checks = "Diagnostics", logs = "Logs", settings = "Settings"
-    static let primary: [Page] = [.home, .profiles, .dns, .adblock, .settings]
+    case home = "Home", profiles = "VPN Profiles", dns = "Encrypted DNS", adblock = "Adblock", network = "Network", checks = "Diagnostics", logs = "Logs", settings = "Settings"
+    static let primary: [Page] = [.home, .profiles, .dns, .adblock, .network, .settings]
     var id: String { rawValue }
-    var icon: String { switch self { case .home: "power"; case .profiles: "key.horizontal"; case .dns: "network"; case .adblock: "hand.raised"; case .checks: "waveform.path.ecg"; case .logs: "text.alignleft"; case .settings: "gearshape" } }
+    var icon: String { switch self { case .home: "power"; case .profiles: "key.horizontal"; case .dns: "network"; case .adblock: "hand.raised"; case .network: "network.badge.shield.half.filled"; case .checks: "waveform.path.ecg"; case .logs: "text.alignleft"; case .settings: "gearshape" } }
 }
 @main struct VayuSetuMac: App {
     @StateObject private var store = AppStore()
@@ -24,6 +24,7 @@ struct DesktopView: View {
     @ObservedObject var tunnel: TunnelController
     @StateObject private var network = NetworkDiagnostics()
     @StateObject private var preferences = DesktopPreferences()
+    @StateObject private var filterClient = FilterClient()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("onboarding-complete") private var onboarded = false
     @State private var onboarding = false
@@ -85,6 +86,7 @@ struct DesktopView: View {
         case .profiles: AnyView(MacProfiles(store: store, tunnel: tunnel, activate: { extensions.activate(onReady: $0) }))
         case .dns: AnyView(MacDNS(store: store, tunnel: tunnel, activate: { extensions.activate(onReady: $0) }))
         case .adblock: AnyView(MacAdblock(filtering: store.filtering, store: store))
+        case .network: AnyView(MacNetwork(client: filterClient, extensions: extensions))
         case .checks: AnyView(VSChecksScreen(store: store, tunnel: tunnel, network: network))
         case .logs: AnyView(VSLogsScreen(tunnel: tunnel))
         case .settings: AnyView(MacSettings(store: store, tunnel: tunnel, preferences: preferences))

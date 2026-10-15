@@ -38,7 +38,7 @@ It does not sell a VPN service and runs no servers of its own. You bring the Wir
 3. To block ads in Safari, turn the VayuSetu extensions on in **Safari → Settings → Extensions**. There are six, so you can choose which categories to enable.
 4. Add a VPN profile, a DNS resolver, or both, then press the power button.
 
-Each release lists a SHA-256 checksum. To check your download: `shasum -a 256 VayuSetu-1.0-14-macOS.dmg`.
+Each release lists a SHA-256 checksum. To check your download: `shasum -a 256 VayuSetu-1.0-15-macOS.dmg`.
 
 **First steps on either platform**
 
@@ -198,13 +198,14 @@ Permissions, protection modes, Privacy Lock, connect on launch and automatic rec
 
 ### VayuSetu for Mac
 
-The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
+The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock, Network and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
 
 - **Home:** the power button and the three protections on the left; connection, live traffic, DNS activity and status on the right.
 - **VPN Profiles:** a list with a details pane, connect, edit, duplicate, export without secrets, and QR export.
 - **Menu bar:** switches for VPN, Encrypted DNS and Adblock, and a power item.
 - **Keyboard:** ⇧⌘P turns protection on or off, ⇧⌘M opens the mode chooser.
-- **System extension:** the WireGuard tunnel runs as a macOS system extension, signed and notarized by Apple.
+- **Network filter (Mac only):** a **Network** page shows which apps connect where, with a live connection list, per-app totals, and rules to block or allow an app, a destination, or both. Right-click any connection to block it. An optional "ask me about new connections" mode pauses a new connection and asks you. It allows by default, never filters VayuSetu's own traffic or loopback, and can be switched off at the top of the page. It is a separate system extension that you approve once in System Settings, and it is part of the download from GitHub, not the Mac App Store build.
+- **System extensions:** the WireGuard tunnel and the network filter run as macOS system extensions, signed and notarized by Apple.
 
 The screenshot shows the Adblock page before Safari protection is switched on.
 
@@ -244,6 +245,7 @@ Credentials live in the Keychain. Connection logs and traffic history are option
 - **"Resolve outside the VPN" is a trade-off.** If you switch it on, the connection to your resolver leaves the VPN; your network can see which resolver you use, though not the lookups. VayuSetu shows a warning when it is on.
 - **Safari content blockers work only in Safari.** DNS filtering covers other apps that use the system DNS.
 - **Dynamic Island notifications** can appear only while the iPhone app is open, because iOS allows nothing else.
+- **The Mac network filter** sees new connections and can block them, but it is not a packet inspector: it does not read the contents of traffic. Like any app-level firewall it can be switched off by anyone who can change System Settings. It has been built and tested at the rule level, and has not yet been validated against heavy real-world traffic.
 - **OpenVPN** is not supported. **Certificate-based IKEv2** is not yet available on the Mac. The Mac app has no QR-code scanner, widgets or Shortcuts.
 - **Not independently audited.** The code is published for review, but VayuSetu has not had a third-party security audit, and the tunnel has not yet been validated against every network transition.
 

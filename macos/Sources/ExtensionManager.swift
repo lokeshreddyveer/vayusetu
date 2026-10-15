@@ -7,6 +7,23 @@ import Combine
     @Published var requesting = false
     @Published var activated = false
     private var completion: (() -> Void)?
+    // The network filter is a second system extension, activated on its own.
+    @Published var filterRequesting = false
+    @Published var filterActivated = false
+    @Published var filterMessage = ""
+    private var filterCompletion: (() -> Void)?
+    static let filterIdentifier = "app.vayusetu.macos.filter"
+    static var filterBundled: Bool { FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/" + filterIdentifier + ".systemextension").path) }
+    func activateFilter(onReady: (() -> Void)? = nil) {
+        if filterActivated { onReady?(); return }
+        guard !filterRequesting else { return }
+        guard Self.filterBundled else { filterMessage = "This build does not include the network filter. Install the VayuSetu download from GitHub."; return }
+        filterCompletion = onReady; filterRequesting = true
+        filterMessage = "Requesting the network filter. macOS may ask for approval in System Settings."
+        let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.filterIdentifier, queue: .main)
+        request.delegate = self
+        OSSystemExtensionManager.shared.submitRequest(request)
+    }
     func activate(onReady: (() -> Void)? = nil) {
         if activated { onReady?(); return }
         guard !requesting else { return }
@@ -20,9 +37,18 @@ import Combine
         OSSystemExtensionManager.shared.submitRequest(request)
     }
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+        if request.identifier == Self.filterIdentifier { Task { @MainActor in self.filterMessage = "Approve VayuSetu's network filter in System Settings → General → Login Items & Extensions → Network Extensions." }; return }
         Task { @MainActor in self.message = "Approve VayuSetu’s network extension in System Settings → Privacy & Security (or Login Items & Extensions on newer macOS)." }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
+        if request.identifier == Self.filterIdentifier {
+            Task { @MainActor in
+                self.filterRequesting = false; self.filterActivated = result == .completed
+                if self.filterActivated { self.filterCompletion?() }; self.filterCompletion = nil
+                self.filterMessage = result == .completed ? "" : "The network filter will finish after restarting this Mac."
+            }
+            return
+        }
         Task { @MainActor in
             self.requesting = false
             self.activated = result == .completed
@@ -31,6 +57,10 @@ import Combine
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
+        if request.identifier == Self.filterIdentifier {
+            Task { @MainActor in self.filterRequesting = false; self.filterActivated = false; self.filterCompletion = nil; self.filterMessage = "The network filter could not be activated: " + error.localizedDescription }
+            return
+        }
         Task { @MainActor in self.requesting = false; self.activated = false; self.completion = nil; self.message = "Extension activation failed. Check signing, provisioning and installation in /Applications. Error: \(error.localizedDescription)" }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
