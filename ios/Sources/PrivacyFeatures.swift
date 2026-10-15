@@ -916,7 +916,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
             configuration = next; lastReload = nil
             if let directory = packageDirectory { for (id, item) in compiled { try? item.data.write(to: directory.appendingPathComponent(id.fileName), options: .atomic) } }
             publishDNSRulesReportingFailure()
-            message = next.safariDesired ? "Rules saved, not applied to Safari. Enable the VayuSetu extensions in Settings → Apps → Safari → Extensions, then return here. DNS filtering already uses them." : "Lists saved. VayuSetu DNS uses them on this device."
+            message = next.safariDesired ? "Rules saved, not applied to Safari. Enable the VayuSetu extensions in \(Self.safariExtensionsPath), then return here. DNS filtering already uses them." : "Lists saved. VayuSetu DNS uses them on this device."
             record("Filter configuration saved; Safari application pending")
             recomputeAggregates()
             return
@@ -940,11 +940,13 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
                 try compiled[id]!.data.write(to: url, options: .atomic)
                 if extensionStates[id]?.enabled == false { waiting.append(id); extensionStates[id]?.reloaded = false; continue }   // Safari loads it when the user enables it
                 guard (compiled[id]?.applied ?? 0) > 0 || previous[id] != nil else { extensionStates[id]?.reloaded = true; continue }       // untouched empty slice
-                try await reloadSafari(id); extensionStates[id]?.reloaded = true; extensionStates[id]?.failure = nil; reloadedNow += 1
+                // Only an extension known to be on gets the long wait; if Safari's state is unknown, do not leave the switch spinning.
+                let confirmedOn = extensionStates[id]?.enabled == true
+                try await reloadSafari(id, timeout: confirmedOn ? 45 : 8); extensionStates[id]?.reloaded = true; extensionStates[id]?.failure = nil; reloadedNow += 1
             } catch {
                 let reason = Self.safariFailure(error); failures[id] = reason; failureDetails = reason
                 try? (previous[id] ?? placeholder).write(to: url, options: .atomic)
-                if (try? await reloadSafari(id)) == nil { record("Rollback of \(id.title) could not be confirmed") }
+                if (try? await reloadSafari(id, timeout: 8)) == nil { record("Rollback of \(id.title) could not be confirmed") }
                 extensionStates[id]?.failure = reason
             }
         }
@@ -1023,7 +1025,14 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     }
     /// Safari answers when it has compiled the rules, which can take a while for large sets. Never wait forever: after 45 s report it,
     /// so the switch stops spinning and the user sees a reason.
-    func reloadSafari(_ id: SafariExtensionID) async throws {
+    static var safariExtensionsPath: String {
+        #if os(macOS)
+        "Safari → Settings → Extensions"
+        #else
+        "Settings → Apps → Safari → Extensions"
+        #endif
+    }
+    func reloadSafari(_ id: SafariExtensionID, timeout: Double = 45) async throws {
         final class Once: @unchecked Sendable { let lock = NSLock(); var done = false; func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true } }
         let once = Once(); let identifier = identifier(for: id)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -1031,9 +1040,9 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
                 guard once.claim() else { return }
                 if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: ()) }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 45) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 guard once.claim() else { return }
-                continuation.resume(throwing: AppIssue(message: "Safari did not finish loading the rules in 45 seconds. Try again, or turn off a large list."))
+                continuation.resume(throwing: AppIssue(message: timeout < 45 ? "Safari did not answer. The VayuSetu extension is probably switched off in Safari." : "Safari did not finish loading the rules in 45 seconds. Try again, or turn off a large list."))
             }
         }
         // Remember which exact package Safari acknowledged, so a relaunch can tell it is still loaded.

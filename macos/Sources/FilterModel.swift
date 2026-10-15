@@ -29,6 +29,28 @@ struct FlowRecord: Codable, Identifiable, Hashable {
     var verdict: NetAction
     /// The rule that decided it; nil when nothing matched and the default applied.
     var rule: UUID?
+    // Who the app is. Optional so that history saved by an earlier build still loads.
+    var team: String? = nil
+    /// A warning about the app's identity, or nil: "Invalid signature" or "Signer changed".
+    var identity: String? = nil
+    var parent: String? = nil
+}
+
+/// A weekly window. `days` use Calendar weekdays (1 = Sunday … 7 = Saturday); times are minutes after midnight.
+/// A window whose end is earlier than its start runs overnight into the next day.
+struct NetSchedule: Codable, Hashable {
+    var days: [Int]
+    var start: Int
+    var end: Int
+    func contains(_ date: Date, calendar: Calendar = .current) -> Bool {
+        let c = calendar.dateComponents([.weekday, .hour, .minute], from: date)
+        guard let day = c.weekday, let hour = c.hour, let minute = c.minute else { return false }
+        let m = hour * 60 + minute
+        if start == end { return days.contains(day) }                       // a whole day
+        if start < end { return days.contains(day) && m >= start && m < end }
+        let before = day == 1 ? 7 : day - 1                                   // overnight: today after the start, or tomorrow morning before the end
+        return (days.contains(day) && m >= start) || (days.contains(before) && m < end)
+    }
 }
 
 struct NetRule: Codable, Identifiable, Hashable {
@@ -42,6 +64,11 @@ struct NetRule: Codable, Identifiable, Hashable {
     var action: NetAction
     var created = Date()
     var note = ""
+    // Optional so that rules saved by an earlier build still load.
+    var group: String? = nil
+    var expires: Date? = nil
+    var schedule: NetSchedule? = nil
+    var groupName: String { group ?? "Default" }
 }
 
 struct FilterSettings: Codable, Equatable {
@@ -51,6 +78,8 @@ struct FilterSettings: Codable, Equatable {
     var defaultAction = NetAction.allow
     /// Seconds to wait for an answer in ask mode before the default applies.
     var askTimeout = 20
+    /// Groups of rules that are switched off.
+    var disabledGroups: [String]? = nil
 }
 
 struct PendingQuestion: Codable, Identifiable, Hashable {
@@ -61,14 +90,24 @@ struct PendingQuestion: Codable, Identifiable, Hashable {
     var host: String
     var port: String
     var proto: String
+    var team: String? = nil
+    var identity: String? = nil
+    var parent: String? = nil
 }
 
 /// Chooses the rule that applies to a connection. The most specific rule wins; at equal specificity a block beats an allow.
 /// Specificity counts: a named app (2), a destination host (exact address 3, a domain 2), a port (1).
 enum NetRuleEngine {
-    static func decide(app: String, host: String, port: String, rules: [NetRule], settings: FilterSettings) -> (action: NetAction, rule: NetRule?) {
+    /// A rule counts only if it has not expired, its group is switched on, and the current time is inside its schedule (if it has one).
+    static func isActive(_ rule: NetRule, now: Date, settings: FilterSettings) -> Bool {
+        if let expires = rule.expires, expires <= now { return false }
+        if let off = settings.disabledGroups, off.contains(rule.groupName) { return false }
+        if let schedule = rule.schedule, !schedule.contains(now) { return false }
+        return true
+    }
+    static func decide(app: String, host: String, port: String, rules: [NetRule], settings: FilterSettings, now: Date = Date()) -> (action: NetAction, rule: NetRule?) {
         var best: (score: Int, rule: NetRule)?
-        for rule in rules where matches(rule, app: app, host: host, port: port) {
+        for rule in rules where isActive(rule, now: now, settings: settings) && matches(rule, app: app, host: host, port: port) {
             let score = specificity(rule)
             if let current = best {
                 if score > current.score || (score == current.score && rule.action == .block && current.rule.action == .allow) { best = (score, rule) }

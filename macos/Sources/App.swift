@@ -47,7 +47,7 @@ struct DesktopView: View {
                 }
                 NavigationStack { content }.environment(\.openDNSTab, { selection = .dns }).environment(\.openAdblockTab, { selection = .adblock }).environment(\.openProfilesTab, { selection = .profiles }).environment(\.openChecksPage, { selection = .checks })
             }.background(VSDesign.background)
-        }.navigationSplitViewStyle(.balanced).vsDialogHost()
+        }.navigationSplitViewStyle(.balanced).environment(\.extensionManager, extensions).vsDialogHost()
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: visibility)
         .alert("VayuSetu", isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } })) { Button("OK") { store.notice = "" } } message: { Text(store.notice) }
         .sheet(isPresented: $onboarding) { NavigationStack { VSOnboardingScreen(store: store) }.frame(minWidth: 520, minHeight: 580) }

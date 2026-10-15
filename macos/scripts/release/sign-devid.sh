@@ -23,7 +23,18 @@ for name in Ads Privacy Security Social Annoyances Custom; do cp "build/auto-sig
 ext="$app/Contents/Library/SystemExtensions/app.vayusetu.macos.tunnel.systemextension"
 profile() { cp "build/devid-profiles/$1.provisionprofile" "$2/Contents/embedded.provisionprofile"; }
 sign() { codesign --force --timestamp --options runtime --entitlements "$2" --sign "$identity" "$1"; }
-profile app.vayusetu.macos.tunnel "$ext"; sign "$ext" build/auto-sign/Tunnel.entitlements
+# A system extension's Mach service name must start with an app group the extension belongs to; the tunnel's name is
+# "<team>.app.vayusetu.macos.tunnel", so it needs the group "<team>.app.vayusetu.macos". Without it macOS refuses to install the extension.
+python3 - "$root" <<'TENT'
+import plistlib, sys
+from pathlib import Path
+root = Path(sys.argv[1]); team = 'X4MH29QNRS'
+ent = plistlib.loads(Path('build/auto-sign/Tunnel.entitlements').read_bytes())
+groups = ent.setdefault('com.apple.security.application-groups', [])
+if team + '.app.vayusetu.macos' not in groups: groups.append(team + '.app.vayusetu.macos')
+Path(root/'Tunnel.entitlements').write_bytes(plistlib.dumps(ent))
+TENT
+profile app.vayusetu.macos.tunnel "$ext"; sign "$ext" "$root/Tunnel.entitlements"
 # The network filter: its own system extension, added only to this Developer ID build.
 bash scripts/build-filter.sh "$app"
 filter="$app/Contents/Library/SystemExtensions/app.vayusetu.macos.filter.systemextension"
@@ -35,8 +46,7 @@ group = team + '.app.vayusetu.filter'
 Path(root/'Filter.entitlements').write_bytes(plistlib.dumps({
     'com.apple.application-identifier': team + '.app.vayusetu.macos.filter', 'com.apple.developer.team-identifier': team,
     'com.apple.developer.networking.networkextension': ['content-filter-provider-systemextension'],
-    'com.apple.security.app-sandbox': True, 'com.apple.security.network.client': True, 'com.apple.security.network.server': True,
-    'com.apple.security.application-groups': [group]}))
+    'com.apple.security.application-groups': [group]}))   # not sandboxed: it has to inspect other apps' code signatures
 host = plistlib.loads(Path('build/auto-sign/Host.entitlements').read_bytes())
 ne = host.setdefault('com.apple.developer.networking.networkextension', [])
 if 'content-filter-provider-systemextension' not in ne: ne.append('content-filter-provider-systemextension')
@@ -72,5 +82,9 @@ for key in ('VayuAppGroup', 'VayuKeychainGroup', 'VayuAppKeychainGroup'): assert
 assert ext.get('VayuKeychainGroup'), 'extension Info.plist is missing VayuKeychainGroup'
 assert 'SIGNING_TEAM_REQUIRED' not in ext['NetworkExtension']['NEMachServiceName'], 'Mach service name is still the placeholder'
 print('Info.plist values verified:', ext['NetworkExtension']['NEMachServiceName'])
+import subprocess
+out = subprocess.run(['codesign', '-d', '--entitlements', '-', str(app/'Contents/Library/SystemExtensions/app.vayusetu.macos.tunnel.systemextension')], capture_output=True, text=True).stdout + ''
+assert 'X4MH29QNRS.app.vayusetu.macos' in out and 'application-groups' in out, 'the tunnel is missing the app group its Mach service name needs'
+print('Tunnel app group verified')
 CHECK
 echo "Signed DMG ready: $dmg. Not notarized and not uploaded."

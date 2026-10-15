@@ -130,6 +130,13 @@ import SwiftUI
         Task { _ = await tell { proxy, reply in proxy.answer(question.id, allow: allow, remember: remember, reply: reply) }; await refreshRules() }
     }
     private func refreshRules() async { if let d = await ask({ $0.rules(reply: $1) }), let r = try? JSONDecoder().decode([NetRule].self, from: d) { rules = r } }
+    func toggleGroup(_ name: String, on: Bool) {
+        var s = settings; var off = Set(s.disabledGroups ?? [])
+        if on { off.remove(name) } else { off.insert(name) }
+        s.disabledGroups = off.isEmpty ? nil : off.sorted(); update(settings: s)
+    }
+    func removeExpired() { push(rules.filter { $0.expires.map { $0 > Date() } ?? true }) }
+    func replaceRules(_ new: [NetRule]) { push(Array(new.prefix(5000))) }
     func clearFlows() { flows = []; Task { _ = await tell { proxy, reply in proxy.clearFlows(reply: reply) } } }
 }
 
@@ -144,6 +151,18 @@ struct MacNetwork: View {
     @State private var view = View_.live
     @State private var newRule = NetRule(app: "*", host: "*", port: "*", action: .block)
     @State private var confirmingBlockAll = false
+    @State private var expiry = Expiry.never
+    @State private var scheduleOn = false
+    @State private var days: Set<Int> = [2, 3, 4, 5, 6]
+    @State private var startTime = Calendar.current.date(from: DateComponents(hour: 9, minute: 0)) ?? Date()
+    @State private var endTime = Calendar.current.date(from: DateComponents(hour: 17, minute: 0)) ?? Date()
+    @State private var importing = false
+    @State private var exporting = false
+    @State private var exportDocument = NetRulesDocument(rules: [])
+    private enum Expiry: String, CaseIterable, Identifiable {
+        case never = "Never", hour = "1 hour", workday = "8 hours", day = "1 day", week = "1 week"; var id: String { rawValue }
+        var seconds: TimeInterval? { switch self { case .never: nil; case .hour: 3600; case .workday: 8 * 3600; case .day: 86_400; case .week: 604_800 } }
+    }
     private enum View_: String, CaseIterable, Identifiable { case live = "Connections", apps = "By app", rules = "Rules"; var id: String { rawValue } }
 
     private var shown: [FlowRecord] {
@@ -169,6 +188,18 @@ struct MacNetwork: View {
         }
         .onAppear { client.startPolling() }
         .onDisappear { client.stopPolling() }
+        .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .json, defaultFilename: "VayuSetu-network-rules") { _ in }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                guard data.count < 4_000_000 else { client.message = "That rules file is too large."; return }
+                let imported = try JSONDecoder().decode([NetRule].self, from: data)
+                // Imported rules get new identifiers so they cannot collide with rules you already have.
+                client.replaceRules(client.rules + imported.map { var r = $0; r.id = UUID(); return r })
+                client.message = "Imported \(imported.count) rule\(imported.count == 1 ? "" : "s")."
+            } catch { client.message = "That file is not a VayuSetu rules file." }
+        }
         .alert("Block everything by default?", isPresented: $confirmingBlockAll) {
             Button("Block by default", role: .destructive) { var s = client.settings; s.defaultAction = .block; client.update(settings: s) }
             Button("Cancel", role: .cancel) {}
@@ -210,6 +241,7 @@ struct MacNetwork: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(q.appName) wants to connect").font(.system(size: 13, weight: .semibold))
                             Text("\(q.host)\(q.port.isEmpty ? "" : ":" + q.port) · \(q.proto)").font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                            if q.identity != nil || q.parent != nil { Text([q.identity, q.parent.map { "started by " + $0 }].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 11, weight: .medium)).foregroundStyle(q.identity == nil ? Color.secondary : Color.orange) }
                         }
                         Spacer(minLength: 8)
                         Button("Allow once") { client.answer(q, allow: true, remember: false) }.buttonStyle(MacHoverButtonStyle())
@@ -255,6 +287,12 @@ struct MacNetwork: View {
                     TableColumn("Destination") { Text($0.host + ($0.port.isEmpty ? "" : ":" + $0.port)).lineLimit(1).textSelection(.enabled) }.width(min: 160, ideal: 260)
                     TableColumn("Protocol") { Text($0.proto).foregroundStyle(.secondary) }.width(60)
                     TableColumn("Result") { MacChip(text: $0.verdict == .allow ? "Allowed" : "Blocked", tint: $0.verdict == .allow ? .green : .red) }.width(80)
+                    TableColumn("Notes") { flow in
+                        HStack(spacing: 6) {
+                            if let warning = flow.identity { MacChip(text: warning, tint: .orange) }
+                            if let parent = flow.parent { Text("via " + parent).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
+                        }.help(flow.team.map { "Signed by team " + $0 } ?? "Not signed by a developer team (Apple software has no team)")
+                    }.width(min: 90, ideal: 170)
                 }.frame(minHeight: 380)
                     .contextMenu(forSelectionType: Int64.self) { ids in
                         let chosen = shown.filter { ids.contains($0.id) }
@@ -264,6 +302,7 @@ struct MacNetwork: View {
                             Button("Block \(first.appName) → \(first.host)") { client.addRule(NetRule(app: first.app, host: first.host, port: "*", action: .block, note: "From the connection list")) }
                             Divider()
                             Button("Always allow \(first.appName) → \(first.host)") { client.addRule(NetRule(app: first.app, host: first.host, port: "*", action: .allow, note: "From the connection list")) }
+                            Button("Allow \(first.appName) → \(first.host) for 1 hour") { var r = NetRule(app: first.app, host: first.host, port: "*", action: .allow, note: "Temporary"); r.group = "Temporary"; r.expires = Date().addingTimeInterval(3600); client.addRule(r) }
                             Divider()
                             Button("Copy destination") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(first.host, forType: .string) }
                         }
@@ -308,6 +347,23 @@ struct MacNetwork: View {
                     Text("The most specific rule wins: a named app beats every app, an address beats a domain, and a port adds to it. At equal specificity, a block beats an allow.").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
+            MacPanel("Groups", icon: "folder", trailing: {
+                HStack(spacing: 8) {
+                    Button { importing = true } label: { Label("Import…", systemImage: "square.and.arrow.down") }.buttonStyle(MacHoverButtonStyle())
+                    Button { exportDocument = NetRulesDocument(rules: client.rules); exporting = true } label: { Label("Export…", systemImage: "square.and.arrow.up") }.buttonStyle(MacHoverButtonStyle()).disabled(client.rules.isEmpty)
+                }
+            }) {
+                VStack(spacing: 0) {
+                    ForEach(groupNames, id: \.self) { name in
+                        let count = client.rules.filter { $0.groupName == name }.count
+                        MacRow(icon: "folder", title: name, detail: "\(count) rule\(count == 1 ? "" : "s")") {
+                            Toggle("", isOn: Binding(get: { !(client.settings.disabledGroups ?? []).contains(name) }, set: { client.toggleGroup(name, on: $0) })).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel(name)
+                        }
+                        if name != groupNames.last { Divider() }
+                    }
+                }
+                Text("Switch a group off to stop all of its rules at once, for example Work or Public Wi-Fi, and back on when you need them.").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             MacPanel("Add a rule", icon: "plus.circle") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
@@ -320,14 +376,38 @@ struct MacNetwork: View {
                         Picker("", selection: $newRule.action) { Text("Block").tag(NetAction.block); Text("Allow").tag(NetAction.allow) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
                         Button("Add") { add() }.buttonStyle(MacHoverButtonStyle(prominent: true)).disabled(newRule.host.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
-                    Text("A domain such as example.com also covers its subdomains. Use * for any destination or any port.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        HStack(spacing: 4) {
+                            TextField("Group", text: Binding(get: { newRule.group ?? "" }, set: { newRule.group = $0 })).textFieldStyle(.roundedBorder).frame(width: 140)
+                            Menu { ForEach(groupNames, id: \.self) { name in Button(name) { newRule.group = name } } } label: { Image(systemName: "chevron.down") }.menuStyle(.borderlessButton).fixedSize()
+                        }
+                        Picker("Expires", selection: $expiry) { ForEach(Expiry.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 190)
+                        Toggle("Only at certain times", isOn: $scheduleOn).toggleStyle(.switch).controlSize(.small)
+                    }
+                    if scheduleOn {
+                        HStack(spacing: 10) {
+                            ForEach([(2, "Mon"), (3, "Tue"), (4, "Wed"), (5, "Thu"), (6, "Fri"), (7, "Sat"), (1, "Sun")], id: \.0) { day in
+                                Toggle(day.1, isOn: Binding(get: { days.contains(day.0) }, set: { if $0 { days.insert(day.0) } else { days.remove(day.0) } })).toggleStyle(.button).controlSize(.small)
+                            }
+                            DatePicker("from", selection: $startTime, displayedComponents: .hourAndMinute).labelsHidden().frame(width: 90)
+                            Text("to").foregroundStyle(.secondary)
+                            DatePicker("to", selection: $endTime, displayedComponents: .hourAndMinute).labelsHidden().frame(width: 90)
+                        }
+                        Text("A window that ends before it starts runs overnight into the next day.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Text("A domain such as example.com also covers its subdomains. Use * for any destination or any port. Groups can be switched on and off together, and a rule with an expiry stops counting by itself.").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
-            MacPanel("Your rules", icon: "list.bullet", trailing: { Text("\(client.rules.count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary) }) {
+            MacPanel("Your rules", icon: "list.bullet", trailing: {
+                HStack(spacing: 8) {
+                    if client.rules.contains(where: { ($0.expires ?? .distantFuture) <= Date() }) { Button("Remove expired") { client.removeExpired() }.buttonStyle(MacHoverButtonStyle()) }
+                    Text("\(client.rules.count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                }
+            }) {
                 if client.rules.isEmpty { Text("No rules yet. Right-click a connection to block it, or add a rule above.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80) }
                 VStack(spacing: 0) {
                     ForEach(client.rules.reversed()) { rule in
-                        MacRow(icon: rule.action == .block ? "hand.raised.fill" : "checkmark.circle", title: "\(rule.app == "*" ? "Every app" : rule.app) → \(rule.host)\(rule.port == "*" ? "" : ":" + rule.port)", detail: rule.note.isEmpty ? "Added " + rule.created.formatted(date: .abbreviated, time: .shortened) : rule.note, tint: rule.action == .block ? .red : .green) {
+                        MacRow(icon: rule.action == .block ? "hand.raised.fill" : "checkmark.circle", title: "\(rule.app == "*" ? "Every app" : rule.app) → \(rule.host)\(rule.port == "*" ? "" : ":" + rule.port)", detail: ruleDetail(rule), tint: rule.action == .block ? .red : .green) {
                             HStack(spacing: 8) {
                                 Picker("", selection: Binding(get: { rule.action }, set: { client.setAction(rule.id, $0) })) { Text("Block").tag(NetAction.block); Text("Allow").tag(NetAction.allow) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
                                 Button(role: .destructive) { client.removeRules([rule.id]) } label: { Image(systemName: "trash") }.buttonStyle(MacHoverButtonStyle()).help("Delete this rule")
@@ -339,10 +419,47 @@ struct MacNetwork: View {
             }
         }
     }
+    private var groupNames: [String] {
+        let used = Set(client.rules.map(\.groupName))
+        return Array(used.union(["Default", "Temporary", "Work", "Public Wi-Fi", "Lockdown"])).sorted { $0 == "Default" ? true : $1 == "Default" ? false : $0 < $1 }
+    }
+    private func ruleDetail(_ rule: NetRule) -> String {
+        var parts = [rule.groupName]
+        if let expires = rule.expires { parts.append(expires <= Date() ? "expired" : "until " + expires.formatted(date: .abbreviated, time: .shortened)) }
+        if let schedule = rule.schedule {
+            let names = [1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat"]
+            func hm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+            parts.append(schedule.days.compactMap { names[$0] }.joined(separator: " ") + " " + hm(schedule.start) + "–" + hm(schedule.end))
+        }
+        if !rule.note.isEmpty { parts.append(rule.note) }
+        return parts.joined(separator: " · ")
+    }
     private func add() {
         var rule = newRule
         rule.host = rule.host.trimmingCharacters(in: .whitespaces); rule.port = rule.port.trimmingCharacters(in: .whitespaces).isEmpty ? "*" : rule.port.trimmingCharacters(in: .whitespaces)
         guard rule.port == "*" || UInt16(rule.port) != nil else { client.message = "A port is a number from 1 to 65535, or *."; return }
-        client.addRule(rule); newRule = NetRule(app: "*", host: "*", port: "*", action: .block)
+        let group = (rule.group ?? "").trimmingCharacters(in: .whitespaces)
+        rule.group = group.isEmpty || group == "Default" ? nil : group
+        rule.expires = expiry.seconds.map { Date().addingTimeInterval($0) }
+        if scheduleOn {
+            guard !days.isEmpty else { client.message = "Choose at least one day for the schedule."; return }
+            let cal = Calendar.current
+            func minutes(_ d: Date) -> Int { cal.component(.hour, from: d) * 60 + cal.component(.minute, from: d) }
+            rule.schedule = NetSchedule(days: days.sorted(), start: minutes(startTime), end: minutes(endTime))
+        }
+        client.addRule(rule); newRule = NetRule(app: "*", host: "*", port: "*", action: .block); expiry = .never; scheduleOn = false
+    }
+}
+
+import UniformTypeIdentifiers
+/// Rules as a JSON file, for backup and for sharing a set of rules between Macs.
+struct NetRulesDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var rules: [NetRule]
+    init(rules: [NetRule]) { self.rules = rules }
+    init(configuration: ReadConfiguration) throws { rules = (try? JSONDecoder().decode([NetRule].self, from: configuration.file.regularFileContents ?? Data())) ?? [] }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return FileWrapper(regularFileWithContents: try encoder.encode(rules))
     }
 }

@@ -48,6 +48,41 @@ import Foundation
         check(wire == specific)
         let record = FlowRecord(id: 7, time: Date(timeIntervalSince1970: 1_700_000_000), app: "a", appName: "A", host: "h", port: "1", proto: "TCP", outbound: true, verdict: .block, rule: specific[0].id)
         check(try JSONDecoder().decode(FlowRecord.self, from: JSONEncoder().encode(record)) == record)
+        // Expiry: a time-limited allow stops counting once it has run out
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var temporary = rule("com.good.app", "tracker.net", .allow); temporary.expires = now.addingTimeInterval(3600)
+        let withTemporary = [rule("*", "tracker.net", .block), temporary]
+        func at(_ date: Date, _ rules: [NetRule], _ s: FilterSettings = allowAll) -> NetAction { NetRuleEngine.decide(app: "com.good.app", host: "tracker.net", port: "443", rules: rules, settings: s, now: date).action }
+        check(at(now, withTemporary) == .allow && at(now.addingTimeInterval(3599), withTemporary) == .allow)
+        check(at(now.addingTimeInterval(3600), withTemporary) == .block && at(now.addingTimeInterval(86_400), withTemporary) == .block)
+        // Groups: a switched-off group is ignored, other groups still apply
+        var work = rule("*", "tracker.net", .block); work.group = "Work"
+        var grouped = FilterSettings(); grouped.disabledGroups = ["Work"]
+        check(at(now, [work]) == .block && at(now, [work], grouped) == .allow)
+        check(at(now, [rule("*", "tracker.net", .block)], grouped) == .block)                       // the default group is unaffected
+        // Schedules, in a fixed calendar and time zone so the test does not depend on this Mac
+        var gregorian = Calendar(identifier: .gregorian); gregorian.timeZone = TimeZone(identifier: "UTC")!
+        func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date { gregorian.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))! }
+        // 2026-10-12 is a Monday (weekday 2); 2026-10-17 is a Saturday (weekday 7)
+        let office = NetSchedule(days: [2, 3, 4, 5, 6], start: 9 * 60, end: 17 * 60)
+        check(office.contains(date(2026, 10, 12, 9, 0), calendar: gregorian) && office.contains(date(2026, 10, 12, 16, 59), calendar: gregorian))
+        check(!office.contains(date(2026, 10, 12, 17, 0), calendar: gregorian) && !office.contains(date(2026, 10, 12, 8, 59), calendar: gregorian))
+        check(!office.contains(date(2026, 10, 17, 12, 0), calendar: gregorian))                       // a Saturday
+        let night = NetSchedule(days: [6], start: 22 * 60, end: 6 * 60)                               // Friday 22:00 to Saturday 06:00
+        check(night.contains(date(2026, 10, 16, 23, 0), calendar: gregorian) && night.contains(date(2026, 10, 17, 5, 59), calendar: gregorian))
+        check(!night.contains(date(2026, 10, 17, 6, 0), calendar: gregorian) && !night.contains(date(2026, 10, 16, 21, 59), calendar: gregorian) && !night.contains(date(2026, 10, 18, 3, 0), calendar: gregorian))
+        check(NetSchedule(days: [2], start: 0, end: 0).contains(date(2026, 10, 12, 13, 0), calendar: gregorian))     // equal start and end: the whole day
+        // Backward compatibility: rules, settings and records saved by an earlier build still load
+        let oldRule = Data(#"{"id":"00000000-0000-0000-0000-000000000001","app":"*","host":"x.com","port":"*","action":"block","created":0,"note":""}"#.utf8)
+        let loaded = try JSONDecoder().decode(NetRule.self, from: oldRule)
+        check(loaded.group == nil && loaded.groupName == "Default" && loaded.expires == nil && loaded.schedule == nil)
+        let oldSettings = Data(#"{"askMode":true,"defaultAction":"allow","askTimeout":20}"#.utf8)
+        check(try JSONDecoder().decode(FilterSettings.self, from: oldSettings).disabledGroups == nil)
+        let oldFlow = Data(#"{"id":1,"time":0,"app":"a","appName":"A","host":"h","port":"1","proto":"TCP","outbound":true,"verdict":"allow"}"#.utf8)
+        check(try JSONDecoder().decode(FlowRecord.self, from: oldFlow).identity == nil)
+        // New fields survive the wire format
+        var full = rule("com.apple.Safari", "example.com", .block); full.group = "Work"; full.expires = now; full.schedule = office
+        check(try JSONDecoder().decode(NetRule.self, from: JSONEncoder().encode(full)) == full)
         print("Filter rule checks passed: \(count)")
     }
 }

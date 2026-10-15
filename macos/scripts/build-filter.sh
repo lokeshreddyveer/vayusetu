@@ -21,7 +21,7 @@ team = 'X4MH29QNRS'
 info = {
     'CFBundleName': 'VayuSetu Network Filter', 'CFBundleDisplayName': 'VayuSetu Network Filter',
     'CFBundleIdentifier': 'app.vayusetu.macos.filter', 'CFBundleExecutable': 'VayuSetuFilter', 'CFBundlePackageType': 'SYSX',
-    'CFBundleVersion': '15', 'CFBundleShortVersionString': '1.0', 'LSMinimumSystemVersion': '14.0',
+    'CFBundleVersion': '17', 'CFBundleShortVersionString': '1.0', 'LSMinimumSystemVersion': '14.0',
     'NSSystemExtensionUsageDescription': 'VayuSetu uses this network extension to show which apps connect where, and to block connections you choose.',
     'NetworkExtension': {'NEMachServiceName': team + '.app.vayusetu.filter.xpc',
                          'NEProviderClasses': {'com.apple.networkextension.filter-data': 'VayuSetuFilter.VayuFilterProvider'}},

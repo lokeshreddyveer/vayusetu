@@ -67,3 +67,24 @@ import Combine
         .replace
     }
 }
+
+import SwiftUI
+private struct ExtensionManagerKey: EnvironmentKey { static let defaultValue: ExtensionManager? = nil }
+extension EnvironmentValues { var extensionManager: ExtensionManager? { get { self[ExtensionManagerKey.self] } set { self[ExtensionManagerKey.self] = newValue } } }
+/// Shows what the system said about installing VayuSetu's extensions, so a request that is waiting for approval or that failed is never silent.
+struct ExtensionBanner: View {
+    @ObservedObject var extensions: ExtensionManager
+    var body: some View {
+        if !extensions.message.isEmpty || extensions.requesting {
+            HStack(alignment: .top, spacing: 10) {
+                if extensions.requesting { ProgressView().controlSize(.small) } else { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(extensions.requesting ? "Waiting for macOS to install the VayuSetu extension" : "The VayuSetu extension is not ready").font(.system(size: 13, weight: .semibold))
+                    Text(extensions.message).font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                Spacer(minLength: 8)
+                Button("Open System Settings") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!) }.buttonStyle(MacHoverButtonStyle())
+            }.padding(14).background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+}

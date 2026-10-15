@@ -33,9 +33,11 @@ struct MacPage<Content: View>: View {
     let title: String
     var subtitle = ""
     @ViewBuilder var content: Content
+    @Environment(\.extensionManager) private var extensions
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let extensions { ExtensionBanner(extensions: extensions) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(.system(size: 26, weight: .semibold, design: .rounded))
                     if !subtitle.isEmpty { Text(subtitle).font(.subheadline).foregroundStyle(.secondary) }
