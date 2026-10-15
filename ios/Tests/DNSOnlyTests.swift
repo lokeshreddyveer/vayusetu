@@ -135,6 +135,35 @@ import Network
         check(rules.decide("www.ads.example") == .allow && rules.decide("ok.tracker.net") == .allow && rules.decide("a.ok.tracker.net") == .allow)
         check(rules.decide("tracker.net") == .block && rules.decide("other.tracker.net") == .block)
         check(DNSRuleSnapshot().decide("ads.example") == .noMatch && rules.decide("") == .noMatch)
+        // Precedence contract (see Docs/Architecture/DNS-Rule-Precedence.md): an allow rule always beats a block rule that matches the same
+        // name, however specific the block is. Website Exceptions rely on this to switch filtering off for a whole site.
+        func snapshot(blockSuffix: [String] = [], blockExact: [String] = [], allowSuffix: [String] = [], allowExact: [String] = []) -> DNSRuleSnapshot {
+            var r = DNSRuleSnapshot()
+            r.blockSuffix = Set(blockSuffix.map(h)); r.blockExact = Set(blockExact.map(h)); r.allowSuffix = Set(allowSuffix.map(h)); r.allowExact = Set(allowExact.map(h))
+            return r
+        }
+        let parentAllow = snapshot(blockSuffix: ["ads.example.com"], allowSuffix: ["example.com"])                       // allowed parent, blocked subdomain
+        check(parentAllow.decide("ads.example.com") == .allow && parentAllow.decide("x.ads.example.com") == .allow && parentAllow.decide("example.com") == .allow)
+        let childAllow = snapshot(blockSuffix: ["example.com"], allowSuffix: ["ok.example.com"])                          // blocked parent, allowed subdomain
+        check(childAllow.decide("ok.example.com") == .allow && childAllow.decide("a.ok.example.com") == .allow)
+        check(childAllow.decide("example.com") == .block && childAllow.decide("other.example.com") == .block && childAllow.decide("x.other.example.com") == .block)
+        let exactAllow = snapshot(blockSuffix: ["example.com"], allowExact: ["example.com"])                              // an exact allow covers only that name
+        check(exactAllow.decide("example.com") == .allow && exactAllow.decide("www.example.com") == .block)
+        let exactBlock = snapshot(blockExact: ["a.example.com"], allowSuffix: ["example.com"])                            // exact block loses to a suffix allow
+        check(exactBlock.decide("a.example.com") == .allow)
+        let both = snapshot(blockSuffix: ["example.com"], blockExact: ["example.com"], allowSuffix: ["example.com"], allowExact: ["example.com"])
+        check(both.decide("example.com") == .allow && both.decide("deep.sub.example.com") == .allow)                      // identical-priority conflict: allow
+        let site = snapshot(blockSuffix: ["site", "ads.news.site", "tracker.news.site"], allowSuffix: ["news.site"])       // a Website Exception on news.site
+        check(site.decide("news.site") == .allow && site.decide("ads.news.site") == .allow && site.decide("cdn.tracker.news.site") == .allow)
+        check(site.decide("other.site") == .block && site.decide("notnews.site") == .block)                               // other sites are untouched
+        let boundary = snapshot(blockSuffix: ["notexample.com"], allowSuffix: ["example.com"])                            // label boundaries, not substrings
+        check(boundary.decide("notexample.com") == .block && boundary.decide("xexample.com") == .noMatch)
+        for original in [parentAllow, childAllow, exactAllow, exactBlock, both, site, boundary] {                           // the decisions survive the stored format
+            let restored = try DNSRuleSnapshot.decode(original.encoded())
+            for name in ["example.com", "ads.example.com", "ok.example.com", "a.ok.example.com", "www.example.com", "news.site", "ads.news.site", "other.site", "notexample.com"] {
+                check(restored.decide(name) == original.decide(name))
+            }
+        }
         // Cross-language fixture: the Go DNS filter must read exactly what the app writes (see dnsfilter_test.go).
         if let path = ProcessInfo.processInfo.environment["VS_RULE_FIXTURE"] { try rules.encoded().write(to: URL(fileURLWithPath: path)) }
         let restored = try DNSRuleSnapshot.decode(rules.encoded())
