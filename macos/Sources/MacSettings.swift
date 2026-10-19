@@ -32,12 +32,12 @@ struct MacSettings: View {
                 Divider()
                 link("Protection modes", store.savedModeTitle, icon: "arrow.triangle.branch") { VSModeScreen(store: store, tunnel: tunnel) }
                 Divider()
-                link("Privacy Lock & connection rules", "Strict routing, on-demand, local network, trusted Wi-Fi", icon: "lock.shield") { VSPrivacyLockScreen(store: store, tunnel: tunnel) }
+                link("Routing & connection rules", "Strict routing, local network, app reconnect", icon: "lock.shield") { VSPrivacyLockScreen(store: store, tunnel: tunnel) }
                 Divider()
                 switchRow("Connect on launch", "Starts protection when VayuSetu opens.", icon: "bolt", isOn: $store.connectOnLaunch)
                 Divider()
                 switchRow("Automatic reconnect", "Reconnects if the tunnel drops.", icon: "arrow.clockwise", isOn: Binding(get: { tunnel.autoReconnect }, set: { tunnel.autoReconnect = $0; UserDefaults.standard.set($0, forKey: "auto-reconnect") }))
-                Text("Strict routing also enables on-demand and captures local-network and push-notification traffic. Changes apply on the next connection, and leak protection still needs independent verification.").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Strict routing applies while connected. System on-demand is unavailable for this WireGuard build; the app can reconnect while running. Changes apply on the next connection, and leak protection still needs independent verification.").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
     }

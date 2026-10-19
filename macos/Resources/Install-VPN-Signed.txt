@@ -1,8 +1,8 @@
-VayuSetu VPN for macOS 0.2.0
+VayuSetu VPN for macOS 1.0
 
-This universal app and its WireGuard system extension are Developer ID signed for team X4MH29QNRS, with validated provisioning profiles. This disk image is signed but has not yet been notarized. Do not treat it as a notarized public release or disable Gatekeeper globally.
+Check the release notes for this disk image's signing and notarization status. Do not disable Gatekeeper globally.
 
-Drag VayuSetuVPN.app to Applications before using the system extension. macOS may require approval for the extension in System Settings. Import your WireGuard configuration, save a DNS-over-HTTPS resolver, then connect and verify the handshake, external IP and DNS behavior.
+Drag VayuSetu.app to Applications before using the system extension. macOS may require approval for the extension in System Settings. Import your WireGuard configuration, save a DNS-over-HTTPS resolver, then connect and verify the handshake, external IP and DNS behavior.
 
 Signing and OS connection status do not establish leak-free protection. DNS -> VPN is unavailable. Live DNS-path/filter, IPv6, leak and recovery validation remain outstanding.
 

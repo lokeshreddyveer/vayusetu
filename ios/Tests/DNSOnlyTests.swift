@@ -185,6 +185,20 @@ import Network
         filtering.replaceRules(DNSRuleSnapshot())
         check(filtering.snapshot.rules == 0)
 
+        // The lookup list is off until asked for, records names and results while on, and is dropped when switched off.
+        let logged = DNSOnlyRuntime(upstream: DNSUpstreamClient(doh), rules: { var r = DNSRuleSnapshot(); r.blockSuffix = [h("example.com")]; return r }()) { _ in }
+        logged.handle(datagram(payload: query))
+        check(logged.recentQueries(after: 0).isEmpty)
+        logged.setLogging(true)
+        logged.handle(datagram(payload: query))
+        let entries = logged.recentQueries(after: 0)
+        check(entries.count == 1 && entries[0].name == "example.com" && entries[0].result == "blocked" && entries[0].type == "A")
+        check(logged.recentQueries(after: entries[0].id).isEmpty)
+        logged.setLogging(false)
+        check(logged.recentQueries(after: 0).isEmpty)
+        check(TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookups(on: true))?.on == true && TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookups(on: false))?.on == false)
+        check(TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookupsAfter(42))?.after == 42 && TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.statistics) == nil)
+
         // LocalDNSProbe against a local UDP responder: a blocked name must read as NXDOMAIN, a normal name as a real answer.
         let answerQueue = DispatchQueue(label: "test.udp")
         let listener = try NWListener(using: .udp, on: .any)

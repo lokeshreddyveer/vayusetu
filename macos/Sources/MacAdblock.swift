@@ -21,7 +21,7 @@ struct MacAdblock: View {
         case .some(true) where filtering.packageReady: return ("Active", "Rules are loaded in \(filtering.neededExtensions.count) extension\(filtering.neededExtensions.count == 1 ? "" : "s") and enabled in Safari.", .green)
         case .some(true): return ("Not loaded", "The extension is enabled; rules have not loaded yet.", .orange)
         case .some(false): return ("Extension off", "\(filtering.extensionSummary). Enable the VayuSetu extensions in Safari Settings → Extensions.", .orange)
-        case .none: return ("Not verified", "Safari's extension state could not be read.", .secondary)
+        case .none: return ("Needs Safari setup", "Open Safari Settings → Extensions and enable the VayuSetu blockers, then return here and refresh.", .orange)
         }
     }
     private var rulesLoaded: String {
@@ -83,11 +83,15 @@ struct MacAdblock: View {
                         Image(systemName: state?.enabled == true ? "checkmark.circle.fill" : "circle").foregroundStyle(state?.enabled == true ? Color.green : Color.secondary)
                         Text("VayuSetu " + id.title).font(.system(size: 13))
                         Spacer()
+                        if let rules = state?.rules { Text("\(rules.formatted()) of 150,000 rules").font(.system(size: 11)).monospacedDigit().foregroundStyle(rules > 140_000 ? Color.orange : Color.secondary).help("Safari allows 150,000 rules in each extension. VayuSetu spreads the lists you turn on across the extensions and keeps the most useful rules when one is full.") }
                         MacChip(text: state?.enabled == true ? (state?.reloaded == true ? "On · loaded" : "On") : "Off", tint: state?.enabled == true ? .green : .secondary)
                     }
                 }
                 if !needed.allSatisfy({ filtering.extensionStates[$0]?.enabled == true }) && !needed.isEmpty {
-                    Text("In Safari → Settings → Extensions, turn on each VayuSetu extension above. Extensions with no rules need no switch.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Safari requires a one-time manual enablement for each extension. Turn on the VayuSetu extensions in Safari → Settings → Extensions, then use Refresh in this app.").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Button("Refresh Safari status") { Task { await filtering.refresh() } }.buttonStyle(MacHoverButtonStyle())
+                    }
                 }
             }
         }

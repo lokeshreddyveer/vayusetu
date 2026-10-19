@@ -28,8 +28,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             var phase = TunnelStartupEvent.Stage.loadingSecret
             TunnelStartupEvent.record(phase)
             do {
-                guard let proto = self.protocolConfiguration as? NETunnelProviderProtocol, let ref = proto.passwordReference else { throw AppIssue(message: "No tunnel configuration reference.") }
-                let secret = try JSONDecoder().decode(TunnelSecret.self, from: Vault.readReference(ref))
+                guard let proto = self.protocolConfiguration as? NETunnelProviderProtocol else { throw AppIssue(message: "No tunnel configuration.") }
+                let secretData: Data
+                #if os(macOS)
+                // A system extension cannot read the app user's data-protection Keychain.
+                // Explicit starts pass the secret in memory; unattended starts fail closed.
+                guard let data = options?["vayuTunnelSecret"] as? Data, data.count <= 128_000,
+                      proto.providerConfiguration?["secret"] == nil else {
+                    throw AppIssue(message: "Open VayuSetu to start this tunnel securely.")
+                }
+                secretData = data
+                #else
+                guard let ref = proto.passwordReference else { throw AppIssue(message: "No tunnel configuration reference.") }
+                secretData = try Vault.readReference(ref)
+                #endif
+                let secret = try JSONDecoder().decode(TunnelSecret.self, from: secretData)
                 guard secret.configurationVersion == nil || secret.configurationVersion == 1 else { throw AppIssue(message: "Unsupported tunnel configuration version.") }
                 if secret.requireStrictRouting == true {
                     guard proto.includeAllNetworks, RoutingSecurityPolicy.matches(proto, strict: true, allowLAN: false) else { throw AppIssue(message: "Required strict routing policy is missing.") }
@@ -180,6 +193,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
+        // Mac: the app sends the compiled snapshot, kept in this extension's own container so restarts and the Go filter find it.
+        if let snapshot = TunnelDiagnosticRequest.rules(in: messageData) {
+            if let url = DNSRuleStore.url { try? snapshot.encoded().write(to: url, options: .atomic) }
+            NSLog("VayuSetu tunnel: received %d DNS filter rules from the app (filtering %@)", snapshot.count, dnsFilteringOn ? "on" : "off")
+            if let runtime = dnsRuntime { if dnsFilteringOn { runtime.replaceRules(snapshot) } }
+            else if dnsFilteringOn { wgDNSReload() }
+            completionHandler?(nil); return
+        }
+        if let request = TunnelDiagnosticRequest.lookupsRequest(messageData) {
+            guard let runtime = dnsRuntime else { completionHandler?(Data("[]".utf8)); return }
+            if let on = request.on { runtime.setLogging(on); completionHandler?(Data("[]".utf8)); return }
+            completionHandler?((try? JSONEncoder().encode(runtime.recentQueries(after: request.after ?? 0))) ?? Data("[]".utf8)); return
+        }
         guard TunnelDiagnosticRequest.supported(messageData), let completionHandler else { completionHandler?(nil); return }
         if let runtime = dnsRuntime {
             // The local DNS tunnel has no WireGuard counters; report only what this runtime observed.

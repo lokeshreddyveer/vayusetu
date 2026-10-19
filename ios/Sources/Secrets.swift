@@ -30,7 +30,12 @@ enum Vault {
         var q = query(account); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?; let status = SecItemCopyMatching(q as CFDictionary, &result)
         if status == errSecItemNotFound, group != nil {
+            // Items saved before the Keychain group existed live in the ordinary (login) Keychain, so search it without the group
+            // and without the data-protection restriction, then move the item into the group.
             q.removeValue(forKey: kSecAttrAccessGroup as String)
+            #if os(macOS)
+            q.removeValue(forKey: kSecUseDataProtectionKeychain as String)
+            #endif
             let legacy = SecItemCopyMatching(q as CFDictionary, &result)
             if legacy == errSecItemNotFound { return nil }; try check(legacy)
             if let data = result as? Data { try put(data, account: account); return data }
@@ -170,6 +175,16 @@ struct DNSOnlyCounters: Codable, Equatable { var queries: UInt64 = 0, answered: 
         rules = try c.decodeIfPresent(UInt64.self, forKey: .rules) ?? 0
     }
     private enum Keys: String, CodingKey { case queries, answered, failed, dropped, blocked, threats, rules }
+}
+
+/// One lookup the local DNS tunnel handled. Kept in the tunnel's memory only, and only while the user has switched the lookup list on.
+struct DNSQueryEntry: Codable, Identifiable, Hashable {
+    var id: UInt64
+    var time: Date
+    var name: String
+    var type: String
+    /// "blocked", "answered" or "failed".
+    var result: String
 }
 
 /// Compiled DNS filter rules shared by the app (writer) and the tunnel (reader). Domains are stored as
@@ -332,6 +347,23 @@ struct TunnelDiagnosticRequest: Codable {
     static var statistics: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "statistics")) }
     /// Asks the local DNS tunnel to reload the compiled filter snapshot; the reply is the usual statistics.
     static var reloadRules: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "reload-rules")) }
+    /// Switches the tunnel's in-memory lookup list on or off, and asks for the entries after a given number.
+    static func lookups(on: Bool) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: on ? "lookups-on" : "lookups-off")) }
+    static func lookupsAfter(_ id: UInt64) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "lookups:\(id)")) }
+    static func lookupsRequest(_ data: Data) -> (on: Bool?, after: UInt64?)? {
+        guard data.count <= 256, let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1 else { return nil }
+        if value.operation == "lookups-on" { return (true, nil) }
+        if value.operation == "lookups-off" { return (false, nil) }
+        if value.operation.hasPrefix("lookups:"), let id = UInt64(value.operation.dropFirst(8)) { return (nil, id) }
+        return nil
+    }
+    /// Mac only: the compiled snapshot itself, prefixed so the tunnel can tell it from a plain request.
+    private static let rulesMagic = Data("VSRULES1".utf8)
+    static func rulesMessage(_ snapshot: DNSRuleSnapshot) -> Data { rulesMagic + snapshot.encoded() }
+    static func rules(in data: Data) -> DNSRuleSnapshot? {
+        guard data.count > rulesMagic.count, data.prefix(rulesMagic.count) == rulesMagic else { return nil }
+        return try? DNSRuleSnapshot.decode(Data(data.dropFirst(rulesMagic.count)))
+    }
     static func supported(_ data: Data) -> Bool {
         if data == Data([1]) { return true }
         guard data.count <= 256, let value = try? JSONDecoder().decode(Self.self, from: data) else { return false }

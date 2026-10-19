@@ -90,13 +90,14 @@ public enum SafariRulesetPlanner {
             for start in parts.indices where parts.count - start >= 2 && SafariRankBoost.domains.contains(parts[start...].joined(separator: ".")) { base += 100; break }
             return base
         }
-        return rules.sorted { a, b in
-            let ca = weight(a), cb = weight(b)
-            if ca != cb { return ca > cb }
-            if a.scope != b.scope { return a.scope == .domainAndSubdomains }
-            if a.domain.count != b.domain.count { return a.domain.count < b.domain.count }
-            return a.domain < b.domain
-        }
+        // Weights and lengths are worked out once per rule: computing them inside the comparator costs minutes on a large list.
+        let decorated = rules.map { (rule: $0, weight: weight($0), length: $0.domain.count) }
+        return decorated.sorted { a, b in
+            if a.weight != b.weight { return a.weight > b.weight }
+            if a.rule.scope != b.rule.scope { return a.rule.scope == .domainAndSubdomains }
+            if a.length != b.length { return a.length < b.length }
+            return a.rule.domain < b.rule.domain
+        }.map(\.rule)
     }
     /// Where blocks that do not fit their own extension go: extensions with the most spare room, in this order.
     private static let spillOrder: [SafariExtensionID] = [.annoyances, .social, .custom, .privacy, .security, .ads]

@@ -1,4 +1,4 @@
-VayuSetu VPN for macOS 0.2.0 — unsigned development build
+VayuSetu VPN for macOS 1.0 — unsigned development build
 
 Includes the compiled native VPN host and WireGuard packet-tunnel system extension.
 Requires macOS 14+, Apple Silicon or Intel.
@@ -6,7 +6,7 @@ Requires macOS 14+, Apple Silicon or Intel.
 Unsigned/ad-hoc builds cannot activate the extension or establish a VPN. Profiles, DNS resolver probes and current-network diagnostics are available for local testing. Actual VPN controls remain disabled until valid provisioning is embedded by the release-signing script.
 
 After Developer ID signing and notarization:
-1. Drag VayuSetuVPN.app to /Applications.
+1. Drag VayuSetu.app to /Applications.
 2. Open the app and select a valid VPN profile and HTTPS resolver.
 3. Choose Activate Network Extension in Settings and approve macOS prompts.
 4. Connect, then run Diagnostics and independent packet-path/leak tests.

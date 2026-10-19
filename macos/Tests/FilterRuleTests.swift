@@ -40,9 +40,11 @@ import Foundation
         check(decide("a", "X.Tracker.NET.", domain) == .block)
         check(NetRuleEngine.hostMatches("fe80::1", "fe80::1%en0") && NetRuleEngine.isAddress("2001:db8::1") && !NetRuleEngine.isAddress("example.com"))
         // Exemptions: our own apps and this Mac
-        check(NetRuleEngine.isExempt(app: "app.vayusetu.macos", host: "1.2.3.4") && NetRuleEngine.isExempt(app: "app.vayusetu.macos.filter", host: "x"))
+        check(NetRuleEngine.isExempt(app: "app.vayusetu.macos", host: "1.2.3.4", team: FilterNames.team, valid: true) && NetRuleEngine.isExempt(app: "app.vayusetu.macos.filter", host: "x", team: FilterNames.team, valid: true))
+        check(!NetRuleEngine.isExempt(app: "app.vayusetu.macos", host: "1.2.3.4") && !NetRuleEngine.isExempt(app: "app.vayusetu.macos", host: "1.2.3.4", team: "OTHERTEAM", valid: true) && !NetRuleEngine.isExempt(app: "app.vayusetu.macos", host: "1.2.3.4", team: FilterNames.team, valid: false))
         check(NetRuleEngine.isExempt(app: "com.apple.Safari", host: "127.0.0.1") && NetRuleEngine.isExempt(app: "x", host: "::1") && NetRuleEngine.isExempt(app: "x", host: "localhost"))
         check(!NetRuleEngine.isExempt(app: "com.apple.Safari", host: "example.com") && !NetRuleEngine.isExempt(app: "app.vayusetuevil", host: "example.com"))
+        check(!NetRuleEngine.isExempt(app: "com.apple.Safari", host: "127.example.com"))
         // Rules and records survive the wire format
         let wire = try JSONDecoder().decode([NetRule].self, from: JSONEncoder().encode(specific))
         check(wire == specific)
@@ -83,6 +85,46 @@ import Foundation
         // New fields survive the wire format
         var full = rule("com.apple.Safari", "example.com", .block); full.group = "Work"; full.expires = now; full.schedule = office
         check(try JSONDecoder().decode(NetRule.self, from: JSONEncoder().encode(full)) == full)
+        // Wildcards, address blocks and ranges
+        check(NetRuleEngine.hostMatches("*.example.com", "a.example.com") && !NetRuleEngine.hostMatches("*.example.com", "example.com"))
+        check(NetRuleEngine.hostMatches("ads*.example.com", "ads1.example.com") && !NetRuleEngine.hostMatches("ads*.example.com", "news.example.com"))
+        check(NetRuleEngine.hostMatches("10.0.0.0/8", "10.200.3.4") && !NetRuleEngine.hostMatches("10.0.0.0/8", "11.0.0.1"))
+        check(NetRuleEngine.hostMatches("192.168.1.0/25", "192.168.1.100") && !NetRuleEngine.hostMatches("192.168.1.0/25", "192.168.1.200"))
+        check(NetRuleEngine.hostMatches("10.0.0.5-10.0.0.9", "10.0.0.7") && !NetRuleEngine.hostMatches("10.0.0.5-10.0.0.9", "10.0.0.10"))
+        check(NetRuleEngine.hostMatches("fd00::/8", "fd12:3456::1") && !NetRuleEngine.hostMatches("fd00::/8", "fe80::1"))
+        check(!NetRuleEngine.hostMatches("10.0.0.0/8", "example.com") && NetRuleEngine.hostMatches("10.0.0.0/8", "example.com", address: "10.1.1.1"))
+        check(NetRuleEngine.isValidDestination("*.example.com") && NetRuleEngine.isValidDestination("10.0.0.0/8") && !NetRuleEngine.isValidDestination("bad host") && !NetRuleEngine.isValidDestination("10.0.0.0/99"))
+        // Direction
+        var incoming = rule("*", "*", .block); incoming.direction = .inbound
+        check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", outbound: false, rules: [incoming], settings: allowAll).action == .block)
+        check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", outbound: true, rules: [incoming], settings: allowAll).action == .allow)
+        // List parsing: hosts files, plain names, ad-blocker lines, comments
+        let parsed = NetListParser.parse("# comment\n127.0.0.1 localhost\n0.0.0.0 ads.example.com tracker.example.net # inline\nplain.org\n||adblock.io^\n||path.io/x^\n@@||allowed.io^\n! note\ncom\n")
+        check(parsed == ["ads.example.com", "tracker.example.net", "plain.org", "adblock.io"])
+        // List lookup: parent domains, exact addresses, patterns, and the kind
+        let blockList = NetList(name: "Ads", kind: .block, entries: ["ads.example.com", "1.2.3.4", "10.9.0.0/16", "evil*.net"])
+        let allowList = NetList(name: "Mine", kind: .allow, entries: ["good.example.com"])
+        let index = NetListIndex([blockList, allowList])
+        check(index.match(.block, host: "ads.example.com", address: nil) == "Ads" && index.match(.block, host: "x.y.ads.example.com", address: nil) == "Ads")
+        check(index.match(.block, host: "example.com", address: nil) == nil && index.match(.block, host: "notads.example.com", address: nil) == nil)
+        check(index.match(.block, host: "unknown", address: "1.2.3.4") == "Ads" && index.match(.block, host: "unknown", address: "10.9.3.3") == "Ads")
+        check(index.match(.block, host: "evil7.net", address: nil) == "Ads" && index.match(.allow, host: "good.example.com", address: nil) == "Mine")
+        var off = blockList; off.enabled = false
+        check(NetListIndex([off]).match(.block, host: "ads.example.com", address: nil) == nil)
+        // Older settings keep their behaviour; new fields round-trip
+        let migrated = try JSONDecoder().decode(FilterSettings.self, from: oldSettings)
+        check(migrated.mode == .normal && migrated.allowAppleSigned && migrated.inboundAction == nil && !migrated.countTraffic)
+        var modern = FilterSettings(); modern.mode = .passive; modern.passiveAction = .block; modern.inboundAction = .block; modern.countTraffic = true
+        check(try JSONDecoder().decode(FilterSettings.self, from: JSONEncoder().encode(modern)) == modern)
+        // Alert answers: scope and lifetime
+        let q = PendingQuestion(id: 1, time: Date(), app: "com.app", appName: "App", host: "www.shop.example.co.uk", port: "443", proto: "TCP")
+        check(AlertRule.domain(of: "www.example.com") == "example.com" && AlertRule.domain(of: "shop.example.co.uk") == "example.co.uk" && AlertRule.domain(of: "example.com") == "example.com" && AlertRule.domain(of: "1.2.3.4") == "1.2.3.4")
+        check(AlertRule.make(for: q, allow: true, scope: .domain, lifetime: .once) == nil)
+        let forever = AlertRule.make(for: q, allow: false, scope: .domain, lifetime: .forever)!
+        check(forever.host == "example.co.uk" && forever.port == "*" && forever.action == .block && forever.expires == nil && forever.group == nil)
+        let hostPort = AlertRule.make(for: q, allow: true, scope: .hostPort, lifetime: .hour)!
+        check(hostPort.host == "www.shop.example.co.uk" && hostPort.port == "443" && hostPort.expires != nil && hostPort.group == "Temporary")
+        check(AlertRule.make(for: q, allow: true, scope: .app, lifetime: .restart)!.group == FilterNames.sessionGroup && AlertRule.make(for: q, allow: true, scope: .app, lifetime: .forever)!.host == "*")
         print("Filter rule checks passed: \(count)")
     }
 }

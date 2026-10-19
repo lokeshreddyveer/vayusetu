@@ -1,0 +1,5 @@
+IP Geolocation by DB-IP — https://db-ip.com/
+DB-IP Lite country data, CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Source mirror: https://github.com/sapics/ip-location-db/releases/tag/latest
+Country label coordinates: Natural Earth (public domain), https://www.naturalearthdata.com/
+Compiled 2026-10-18. Country estimates are approximate, not device or server locations.

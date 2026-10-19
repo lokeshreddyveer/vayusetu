@@ -9,12 +9,36 @@ enum Page: String, CaseIterable, Identifiable {
     var icon: String { switch self { case .home: "power"; case .profiles: "key.horizontal"; case .dns: "network"; case .adblock: "hand.raised"; case .network: "network.badge.shield.half.filled"; case .checks: "waveform.path.ecg"; case .logs: "text.alignleft"; case .settings: "gearshape" } }
 }
 @main struct VayuSetuMac: App {
+    init() { CrashTrace.install() }
     @StateObject private var store = AppStore()
     @StateObject private var extensions = ExtensionManager()
+    @StateObject private var filterClient = FilterClient()
     @AppStorage("appearance") private var appearance = "dark"
+    /// `open "vayusetu://protection/dns/on"` (or `vpn`, `adblock`; `on`, `off` or `toggle`) from Terminal, a shortcut or a script.
+    private func handleProtectionLink(_ url: URL) async {
+        guard url.scheme == "vayusetu", url.host == "protection" else { return }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        guard parts.count == 2 else { return }
+        let pill: ProtectionPill, state: PillState
+        switch parts[0] {
+        case "vpn": pill = .vpn; state = store.vpnPill
+        case "dns": pill = .dns; state = store.dnsPill
+        case "adblock": pill = .adblock; state = store.adblockPill
+        default: return
+        }
+        let isOn = state == .active || state == .pending
+        switch parts[1] {
+        case "on": if isOn { return }
+        case "off": if !isOn { return }
+        case "toggle": break
+        default: return
+        }
+        if pill == .adblock { await store.togglePill(pill) }
+        else { await withCheckedContinuation { continuation in extensions.activate { Task { await store.togglePill(pill); continuation.resume() } } } }
+    }
     var body: some Scene {
-        WindowGroup("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions).frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
-        MenuBarExtra("VayuSetu", systemImage: "wind") { MenuControls(store: store, extensions: extensions) }
+        WindowGroup("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions, filterClient: filterClient).onOpenURL { url in if !filterClient.handle(url: url) { Task { await handleProtectionLink(url) } } }.frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
+        MenuBarExtra("VayuSetu", systemImage: "wind") { MenuControls(store: store, extensions: extensions, filter: filterClient) }
         .commands { CommandGroup(replacing: .appInfo) { Button("About VayuSetu") { NSApplication.shared.orderFrontStandardAboutPanel(options: [.applicationName: "VayuSetu", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown", .credits: NSAttributedString(string: "By R3dby · Native VPN and encrypted DNS control center")]) } } }
     }
 }
@@ -24,14 +48,14 @@ struct DesktopView: View {
     @ObservedObject var tunnel: TunnelController
     @StateObject private var network = NetworkDiagnostics()
     @StateObject private var preferences = DesktopPreferences()
-    @StateObject private var filterClient = FilterClient()
+    @ObservedObject var filterClient: FilterClient
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("onboarding-complete") private var onboarded = false
     @State private var onboarding = false
     @State private var selection: Page? = .home
     @State private var visibility: NavigationSplitViewVisibility = .all
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    init(store: AppStore, extensions: ExtensionManager) { self.store = store; self.extensions = extensions; tunnel = store.tunnel }
+    init(store: AppStore, extensions: ExtensionManager, filterClient: FilterClient) { self.store = store; self.extensions = extensions; self.filterClient = filterClient; tunnel = store.tunnel }
     var body: some View {
         NavigationSplitView(columnVisibility: $visibility) {
             VStack(alignment: .leading, spacing: 12) {
@@ -42,7 +66,7 @@ struct DesktopView: View {
         } detail: {
             HStack(spacing: 0) {
                 if visibility == .detailOnly {
-                    VStack(spacing: 12) { ForEach(Page.primary) { page in Button { selection = page } label: { Image(systemName: page.icon).font(.title3).frame(width: 44, height: 44).background(selection == page ? VSDesign.accent.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 10)) }.buttonStyle(.plain).help(page.rawValue).accessibilityLabel(page.rawValue).foregroundStyle(selection == page ? VSDesign.accent : .secondary) }; Spacer() }.padding(10).background(.regularMaterial)
+                    compactSidebar
                     Divider()
                 }
                 NavigationStack { content }.environment(\.openDNSTab, { selection = .dns }).environment(\.openAdblockTab, { selection = .adblock }).environment(\.openProfilesTab, { selection = .profiles }).environment(\.openChecksPage, { selection = .checks })
@@ -79,6 +103,41 @@ struct DesktopView: View {
             if let index = args.firstIndex(of: "--page"), args.indices.contains(index + 1), let page = Page(rawValue: args[index + 1]) { selection = page }
             if preferences.connectOnLaunch && TunnelController.available { for _ in 0..<100 { if tunnel.ready || Task.isCancelled { break }; try? await Task.sleep(for: .milliseconds(100)) }; if !Task.isCancelled { extensions.activate { store.connect() } } }
         }
+        // The filter must keep polling even when the user is on Home, Adblock, or has
+        // only the menu-bar control visible. Otherwise a paused connection can time out
+        // before the Network page is opened.
+        .task {
+            // Re-submit the bundled filter on every launch so macOS can replace
+            // an older active system extension after an app update.
+            extensions.activateFilter()
+            filterClient.startPolling()
+            extensions.checkComponents()
+            var seconds = 0
+            while !Task.isCancelled { try? await Task.sleep(for: .seconds(1)); seconds += 1; if seconds % 90 == 0 { extensions.checkComponents() } }
+            filterClient.stopPolling()
+        }
+        .onChange(of: filterClient.pending) { _, _ in
+            ConnectionAlertController.shared.sync(client: filterClient)
+        }
+    }
+    private var compactSidebar: some View {
+        VStack(spacing: 12) {
+            ForEach(Page.primary) { page in
+                Button { selection = page } label: {
+                    Image(systemName: page.icon)
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                        .background(selection == page ? VSDesign.accent.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .help(page.rawValue)
+                .accessibilityLabel(page.rawValue)
+                .foregroundStyle(selection == page ? VSDesign.accent : .secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(.regularMaterial)
     }
     var content: AnyView {
         switch selection ?? .home {

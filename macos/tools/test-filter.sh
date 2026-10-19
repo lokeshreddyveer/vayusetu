@@ -6,3 +6,6 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 mkdir -p build/filter-tests
 xcrun swiftc -swift-version 5 -parse-as-library Sources/FilterModel.swift Tests/FilterRuleTests.swift -o build/filter-tests/run
 build/filter-tests/run
+
+xcrun swiftc -swift-version 5 -parse-as-library Sources/FilterModel.swift Filter/FilterProvider.swift Tests/FilterProviderTests.swift -framework NetworkExtension -framework Network -framework Security -o build/filter-tests/provider
+build/filter-tests/provider

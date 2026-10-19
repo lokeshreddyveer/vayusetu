@@ -28,8 +28,11 @@ rm -rf build/release/DMG/VayuSetu.app
 ditto "$app" build/release/DMG/VayuSetu.app
 ln -sfn /Applications build/release/DMG/Applications
 cp Resources/Install-VPN-Signed.txt 'build/release/DMG/Read Me.txt'
-hdiutil create -volname 'VayuSetu' -srcfolder build/release/DMG -format UDZO -ov dist/release/VayuSetu-1.0-macOS.dmg
-codesign --force --timestamp --sign "$VAYU_SIGN_IDENTITY" dist/release/VayuSetu-1.0-macOS.dmg
-hdiutil verify dist/release/VayuSetu-1.0-macOS.dmg
-shasum -a 256 dist/release/VayuSetu-1.0-macOS.dmg > dist/release/VayuSetu-1.0-macOS.dmg.sha256
+version=$(python3 -c 'import plistlib; print(plistlib.load(open("build/release/VayuSetu.app/Contents/Info.plist","rb"))["CFBundleShortVersionString"])')
+build=$(python3 -c 'import plistlib; print(plistlib.load(open("build/release/VayuSetu.app/Contents/Info.plist","rb"))["CFBundleVersion"])')
+dmg="dist/release/VayuSetu-$version-$build-auto-signed-macOS.dmg"
+hdiutil create -volname 'VayuSetu' -srcfolder build/release/DMG -format UDZO -ov "$dmg"
+codesign --force --timestamp --sign "$VAYU_SIGN_IDENTITY" "$dmg"
+hdiutil verify "$dmg"
+shasum -a 256 "$dmg" > "$dmg.sha256"
 echo 'Signed DMG prepared. No upload performed. Run notarize.sh explicitly for Apple notarization.'

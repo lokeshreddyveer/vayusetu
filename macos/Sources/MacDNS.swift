@@ -105,7 +105,10 @@ struct MacDNS: View {
         }
     }
     private var activity: some View {
-        MacPanel("DNS activity", icon: "chart.xyaxis.line") { VSActivityDashboard(filtering: store.filtering).padding(.horizontal, -4) }
+        VStack(spacing: 20) {
+            MacPanel("Recent lookups", icon: "list.bullet.rectangle") { VSLookupsPanel(tunnel: tunnel) }
+            MacPanel("DNS activity", icon: "chart.xyaxis.line") { VSActivityDashboard(filtering: store.filtering).padding(.horizontal, -4) }
+        }
     }
     private var more: some View {
         MacPanel("More", icon: "ellipsis.circle") {

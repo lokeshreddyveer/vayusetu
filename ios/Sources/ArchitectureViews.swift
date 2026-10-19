@@ -173,6 +173,13 @@ struct VSPrivacyLockScreen: View {
     @State private var restoring = false
     @State private var trusted = TrustedNetworks.saved
     @State private var newNetwork = ""
+    private var relaxMessage: String {
+        #if os(macOS)
+        "This disconnects VayuSetu. Traffic may use the ordinary network until you explicitly reconnect. Restore Strict Policy stays visible here."
+        #else
+        "This disconnects VayuSetu and disables its on-demand policy. Traffic may use the ordinary network until you reconnect. Restore Strict Policy stays visible here."
+        #endif
+    }
     private func addNetwork() {
         let updated = TrustedNetworks.normalized(trusted + [newNetwork])
         guard updated.count > trusted.count else { newNetwork = ""; return }
@@ -184,13 +191,28 @@ struct VSPrivacyLockScreen: View {
                 VSEvidenceRow(title: "Requested policy", value: store.strictRouting ? "Strict" : "Compatibility")
                 VSEvidenceRow(title: "Applied configuration", value: tunnel.appliedConfigurationDescription)
                 VSEvidenceRow(title: "Isolation verification", value: "Not verified")
+                #if os(macOS)
+                Toggle("Strict routing while connected", isOn: $store.strictRouting).disabled(tunnel.running || tunnel.busy)
+                #else
                 Toggle("Privacy Lock", isOn: $store.strictRouting).disabled(tunnel.running || tunnel.busy)
+                #endif
                 Toggle("Require dual-stack WireGuard profile", isOn: $store.requireNativeIPv6).disabled(tunnel.running || tunnel.busy)
                 Text("Requires an IPv6 tunnel address and IPv6 default route in the profile. This does not require IPv6 from your Wi-Fi or cellular network, or prove IPv6 leak prevention. IKEv2 cannot connect with this requirement enabled.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Allow local network", isOn: Binding(get: { !store.strictRouting && tunnel.allowLAN }, set: { tunnel.allowLAN = $0; UserDefaults.standard.set($0, forKey: "allow-lan") })).disabled(tunnel.running || tunnel.busy || store.strictRouting)
+                #if os(macOS)
+                Text("WireGuard starts only when VayuSetu requests it. System on-demand starts are unavailable because they cannot receive credentials securely.").font(.caption).foregroundStyle(.secondary)
+                #else
                 Toggle("Connect on demand", isOn: Binding(get: { store.strictRouting || store.onDemand }, set: { store.onDemand = $0 })).disabled(tunnel.running || tunnel.busy || store.strictRouting)
+                #endif
                 Toggle("Automatic reconnect", isOn: Binding(get: { tunnel.autoReconnect }, set: { tunnel.autoReconnect = $0; UserDefaults.standard.set($0, forKey: "auto-reconnect") }))
-            } header: { Text("Routing policy") } footer: { Text("Privacy Lock requests strict routing and on-demand connection using Apple’s supported controls. OS-required exceptions may remain. It is not an absolute kill switch. Changes apply on the next connection.") }
+            } header: { Text("Routing policy") } footer: {
+                #if os(macOS)
+                Text("Strict routing applies while connected. App-controlled reconnect needs VayuSetu running; traffic may use the ordinary network after a disconnect. Changes apply on the next connection.")
+                #else
+                Text("Privacy Lock requests strict routing and on-demand connection using Apple’s supported controls. OS-required exceptions may remain. It is not an absolute kill switch. Changes apply on the next connection.")
+                #endif
+            }
+            #if !os(macOS)
             VSSection {
                 ForEach(trusted, id: \.self) { name in
                     HStack(spacing: 10) {
@@ -210,6 +232,7 @@ struct VSPrivacyLockScreen: View {
                      ? "Privacy Lock is on, so trusted networks are ignored: it keeps the VPN on everywhere. Turn Privacy Lock off to use them."
                      : "With Connect on demand on, the VPN switches off on these Wi-Fi networks and on again everywhere else. Type the name exactly as Wi-Fi shows it. Applies the next time you connect.")
             }
+            #endif
             VSSection("Recovery") {
                 if relaxed {
                     Label("Privacy Lock is temporarily relaxed", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -223,7 +246,7 @@ struct VSPrivacyLockScreen: View {
             }
             VSSection("Connection recovery") { RetryPreferences(tunnel: tunnel, store: store) }
         }.vsList().vsCompactDetails().vsHeader("Privacy Lock").vsEditor()
-        .vsConfirm(isPresented: $relaxing, title: "Temporarily relax routing?", message: "This disconnects VayuSetu and disables its on-demand policy. Traffic may use the ordinary network until you reconnect. Restore Strict Policy stays visible here.", confirm: "Temporarily Relax", destructive: true, icon: "lock.open.fill") { Task { store.stopPendingConnectionRequests(); await tunnel.emergencyReset(); store.strictRouting = false; store.onDemand = false; relaxed = true; store.filtering.record("Privacy Lock temporarily relaxed; restore explicitly after network recovery") } }
+        .vsConfirm(isPresented: $relaxing, title: "Temporarily relax routing?", message: relaxMessage, confirm: "Temporarily Relax", destructive: true, icon: "lock.open.fill") { Task { store.stopPendingConnectionRequests(); await tunnel.emergencyReset(); store.strictRouting = false; store.onDemand = false; relaxed = true; store.filtering.record("Privacy Lock temporarily relaxed; restore explicitly after network recovery") } }
         .vsConfirm(isPresented: $restoring, title: "Restore strict routing?", message: "The current tunnel disconnects. Strict policy applies when you explicitly reconnect.", confirm: "Restore Strict Policy", icon: "lock.shield.fill") { Task { store.stopPendingConnectionRequests(); await tunnel.disconnect(); store.strictRouting = true; relaxed = false; store.filtering.record("Strict routing restored as desired policy; reconnect to apply") } }
     }
 }

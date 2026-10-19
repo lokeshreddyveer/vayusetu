@@ -68,6 +68,7 @@ import AppKit
     private var observer: NSObjectProtocol?
     #if os(macOS)
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var savedPreferencesSanitized = false
     #endif
     static var available: Bool {
         #if VPN_ENABLED
@@ -185,6 +186,33 @@ import AppKit
         guard Self.available else { return }
         do {
             let all = try await NETunnelProviderManager.loadAllFromPreferences()
+            #if os(macOS)
+            // Remove secrets written by older builds before an unattended restart can reuse them.
+            for owned in all where (owned.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerID {
+                guard let saved = owned.protocolConfiguration as? NETunnelProviderProtocol else { continue }
+                var configuration = saved.providerConfiguration ?? [:]
+                let legacyValue = configuration.removeValue(forKey: "secret")
+                let hadSecret = legacyValue != nil
+                if hadSecret || owned.isOnDemandEnabled {
+                    if let legacySecret = legacyValue as? String, try Vault.get("active-tunnel") == nil {
+                        guard let data = Data(base64Encoded: legacySecret), data.count <= 128_000,
+                              (try? JSONDecoder().decode(TunnelSecret.self, from: data)) != nil else {
+                            throw AppIssue(message: "Saved VPN credentials could not be migrated.")
+                        }
+                        try Vault.put(data, account: "active-tunnel")
+                    }
+                    saved.providerConfiguration = configuration
+                    owned.protocolConfiguration = saved
+                    owned.isOnDemandEnabled = false
+                    owned.onDemandRules = []
+                    try await owned.saveToPreferences()
+                    try await owned.loadFromPreferences()
+                    guard (owned.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["secret"] == nil,
+                          !owned.isOnDemandEnabled else { throw AppIssue(message: "Saved VPN credentials could not be removed.") }
+                }
+            }
+            savedPreferencesSanitized = true
+            #endif
             let wireguard = all.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerID }
             let native = NEVPNManager.shared()
             try? await native.loadFromPreferences()
@@ -237,6 +265,11 @@ import AppKit
                 stage = .tunnelEstablished; retryAttempt = 0; watchdog?.cancel(); trafficPoints = []; usageAlerted = false
                 if sessionID == nil { sessionID = UUID(); sessionStart = manager?.connection.connectedDate ?? Date(); sessionElapsedOffset = Int64(max(0, Date().timeIntervalSince(sessionStart!))); sessionStartedAt = .now }
                 startSampling()
+                if lookupsOn { Task { try? await Task.sleep(for: .seconds(2)); self.pushLookupSetting() } }
+                #if os(macOS)
+                reloadDNSRules()   // the root tunnel cannot read this user's App Group file, so hand it the rules
+                Task { try? await Task.sleep(for: .seconds(3)); self.reloadDNSRules() }   // once more: the tunnel may not have been ready for the first message
+                #endif
             case .connecting: stage = .connecting
             case .reasserting: stage = .reconnecting
             case .disconnecting: stage = .disconnecting
@@ -292,6 +325,9 @@ import AppKit
         center.add(request) { _ in }
     }
     func connect(profile: SavedProfile, configuration: Data, resolver: String, mode: RoutingMode, onDemand: Bool, strictRouting: Bool, requireNativeIPv6: Bool = false, bootstrapAddresses: [String] = [], filtering: Bool = false, dnsUpstreamDirect: Bool = false, applyResolver: Bool = true) async {
+        #if os(macOS)
+        guard savedPreferencesSanitized else { message = "Saved VPN preferences could not be secured. Reopen VayuSetu after unlocking this Mac."; return }
+        #endif
         guard ready, !busy, !running else { return }
         guard mode.supported else { stage = .blocked; message = RoutingMode.directDNSUnavailable; return }
         guard Self.available else { message = "Use the VayuSetuVPN scheme with a developer team that supports Network Extensions. This preview build cannot create a VPN."; return }
@@ -351,9 +387,15 @@ import AppKit
             UserDefaults.standard.set(allowLAN, forKey: "allow-lan")
             UserDefaults.standard.set(autoReconnect, forKey: "auto-reconnect")
             mgr.protocolConfiguration = proto; mgr.localizedDescription = "VayuSetu · \(profile.name)"
-            mgr.isEnabled = true; mgr.isOnDemandEnabled = onDemand || strictRouting
-            if onDemand || strictRouting { mgr.onDemandRules = TrustedNetworks.rules(strict: strictRouting) }
+            #if os(macOS)
+            let effectiveOnDemand = false // On-demand starts have no in-memory secret.
+            mgr.isEnabled = true; mgr.isOnDemandEnabled = false; mgr.onDemandRules = []
+            #else
+            let effectiveOnDemand = onDemand || strictRouting
+            mgr.isEnabled = true; mgr.isOnDemandEnabled = effectiveOnDemand
+            if effectiveOnDemand { mgr.onDemandRules = TrustedNetworks.rules(strict: strictRouting) }
             else { mgr.onDemandRules = [] }
+            #endif
             setupStep = "save-wireguard-preferences"
             try await mgr.saveToPreferences()
             setupStep = "read-back-wireguard-preferences"
@@ -362,20 +404,21 @@ import AppKit
             guard let saved = mgr.protocolConfiguration as? NETunnelProviderProtocol,
                   saved.includeAllNetworks == (mode == .vpnFirst && strictRouting),
                   RoutingSecurityPolicy.matches(saved, strict: strictRouting, allowLAN: allowLAN),
-                  mgr.isEnabled, mgr.isOnDemandEnabled == (onDemand || strictRouting),
-                  RoutingSecurityPolicy.matchesOnDemand(mgr.onDemandRules, enabled: onDemand || strictRouting, trusted: TrustedNetworks.active(strict: strictRouting)) else {
+                  mgr.isEnabled, mgr.isOnDemandEnabled == effectiveOnDemand,
+                  RoutingSecurityPolicy.matchesOnDemand(mgr.onDemandRules, enabled: effectiveOnDemand, trusted: TrustedNetworks.active(strict: strictRouting)) else {
                 throw AppIssue(message: "Saved routing policy differs from the requested policy.")
             }
             manager = mgr; configuredProfile = profile.id; activeMode = mode; protocolName = "WireGuard"; UserDefaults.standard.set("WireGuard", forKey: "last-vpn-adapter")
             setupStep = "start-wireguard-tunnel"
-            try await startRegisteredTunnel(mgr, operation: operationID) {
+            try await startRegisteredTunnel(mgr, operation: operationID, secret: secret) {
                 guard let saved = mgr.protocolConfiguration as? NETunnelProviderProtocol else { return false }
                 return saved.providerBundleIdentifier == self.providerID && saved.passwordReference == proto.passwordReference &&
                     saved.providerConfiguration?["profileID"] as? String == profile.id.uuidString &&
+                    saved.providerConfiguration?["secret"] == nil &&
                     saved.includeAllNetworks == proto.includeAllNetworks &&
                     RoutingSecurityPolicy.matches(saved, strict: strictRouting, allowLAN: self.allowLAN) &&
-                    mgr.isOnDemandEnabled == (onDemand || strictRouting) &&
-                    RoutingSecurityPolicy.matchesOnDemand(mgr.onDemandRules, enabled: onDemand || strictRouting, trusted: TrustedNetworks.active(strict: strictRouting))
+                    mgr.isOnDemandEnabled == effectiveOnDemand &&
+                    RoutingSecurityPolicy.matchesOnDemand(mgr.onDemandRules, enabled: effectiveOnDemand, trusted: TrustedNetworks.active(strict: strictRouting))
             }
             record("Connection requested · \(mode.title)")
             refreshStatus(); armWatchdog(); message = ""
@@ -397,6 +440,39 @@ import AppKit
         }
     }
     var localDNSRunning: Bool { running && protocolName == "Local DNS" }
+
+    // MARK: Recent lookups (local DNS tunnel only; kept in the tunnel's memory, never saved)
+    @Published private(set) var lookups: [DNSQueryEntry] = []
+    @Published private(set) var lookupsOn = UserDefaults.standard.bool(forKey: "dns-lookups-on")
+    private var lookupTask: Task<Void, Never>?
+    var lookupsAvailable: Bool { localDNSRunning && status == .connected }
+    func setLookups(_ on: Bool) {
+        lookupsOn = on; UserDefaults.standard.set(on, forKey: "dns-lookups-on")
+        if !on { lookups = [] }
+        pushLookupSetting()
+    }
+    /// Tells the tunnel whether to keep the list, and starts or stops asking for it.
+    func pushLookupSetting() {
+        lookupTask?.cancel(); lookupTask = nil
+        guard lookupsAvailable, let session = manager?.connection as? NETunnelProviderSession else { return }
+        try? session.sendProviderMessage(TunnelDiagnosticRequest.lookups(on: lookupsOn)) { _ in }
+        guard lookupsOn else { return }
+        lookupTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                await self?.fetchLookups()
+            }
+        }
+    }
+    private func fetchLookups() async {
+        guard lookupsAvailable, let session = manager?.connection as? NETunnelProviderSession else { return }
+        let after = lookups.last?.id ?? 0
+        let data: Data? = await withCheckedContinuation { continuation in
+            do { try session.sendProviderMessage(TunnelDiagnosticRequest.lookupsAfter(after)) { continuation.resume(returning: $0) } } catch { continuation.resume(returning: nil) }
+        }
+        guard let data, let new = try? JSONDecoder().decode([DNSQueryEntry].self, from: data), !new.isEmpty else { return }
+        lookups = Array((lookups + new).suffix(400))
+    }
     /// ADR-011 spike: starts the local DNS-only tunnel. No WireGuard profile or remote server is involved,
     /// and only the virtual DNS address is routed into the tunnel. "Tunnel established" is not DNS evidence:
     /// the extension's query counters are the observation.
@@ -404,9 +480,17 @@ import AppKit
     func reloadDNSRules() {
         // Any packet tunnel that hosts the filter (local DNS tunnel or WireGuard) reloads; others ignore the message.
         guard running, protocolName != "IKEv2", status == .connected, let session = manager?.connection as? NETunnelProviderSession else { return }
+        #if os(macOS)
+        // A root system extension has its own App Group container, so the snapshot travels in the message.
+        try? session.sendProviderMessage(TunnelDiagnosticRequest.rulesMessage(DNSRuleStore.load())) { _ in }
+        #else
         try? session.sendProviderMessage(TunnelDiagnosticRequest.reloadRules) { _ in }
+        #endif
     }
     func connectDNSOnly(resolver: String, bootstrapAddresses: [String] = [], filtering: Bool = false) async {
+        #if os(macOS)
+        guard savedPreferencesSanitized else { message = "Saved VPN preferences could not be secured. Reopen VayuSetu after unlocking this Mac."; return }
+        #endif
         guard ready, !busy, !running else { return }
         guard Self.available else { message = "Use the VayuSetuVPN scheme with a developer team that supports Network Extensions. This preview build cannot create a tunnel."; return }
         busy = true; defer { busy = false }
@@ -448,7 +532,7 @@ import AppKit
             guard lifecycleID == operationID, wantedConnection, mgr.isEnabled else { throw CancellationError() }
             manager = mgr; configuredProfile = nil; activeMode = .vpnFirst; protocolName = "Local DNS"
             setupStep = "start-tunnel"
-            try await startRegisteredTunnel(mgr, operation: operationID) { mgr.isEnabled }
+            try await startRegisteredTunnel(mgr, operation: operationID, secret: secret) { mgr.isEnabled }
             record("Local DNS tunnel requested")
             refreshStatus(); armWatchdog(); message = ""
         } catch {
@@ -562,7 +646,7 @@ import AppKit
             record("Native IKEv2 setup failed at " + setupStep + " · " + detail, severity: .error)
         }
     }
-    private func startRegisteredTunnel(_ target: NEVPNManager, operation: UUID, validate: () -> Bool) async throws {
+    private func startRegisteredTunnel(_ target: NEVPNManager, operation: UUID, secret: Data? = nil, validate: () -> Bool) async throws {
         for attempt in 0...2 {
             guard lifecycleID == operation, wantedConnection, !Task.isCancelled else { throw CancellationError() }
             if attempt > 0 {
@@ -577,7 +661,14 @@ import AppKit
             guard [.disconnected, .invalid].contains(target.connection.status) else {
                 throw AppIssue(message: "Wait for the previous VPN to finish stopping.")
             }
-            do { try target.connection.startVPNTunnel() }
+            do {
+                #if os(macOS)
+                if let secret { try target.connection.startVPNTunnel(options: ["vayuTunnelSecret": secret as NSData]) }
+                else { try target.connection.startVPNTunnel() } // Native IKEv2 uses its own Keychain reference.
+                #else
+                try target.connection.startVPNTunnel()
+                #endif
+            }
             catch {
                 guard VPNActivationRecovery.shouldReload(error as NSError, retries: attempt) else { throw error }
                 record("VPN activation registration reload · attempt " + String(attempt + 1), severity: .warning)
@@ -784,7 +875,17 @@ import AppKit
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard let self else { return }; self.retryTask = nil
             guard self.lifecycleID == id, self.wantedConnection, self.pathAvailable, self.status == .disconnected else { return }
-            do { try self.manager?.connection.startVPNTunnel(); self.refreshStatus(); self.armWatchdog() }
+            do {
+                #if os(macOS)
+                if self.manager?.protocolConfiguration is NETunnelProviderProtocol {
+                    guard let secret = try Vault.get("active-tunnel"), secret.count <= 128_000 else { throw AppIssue(message: "Saved tunnel credentials are unavailable.") }
+                    try self.manager?.connection.startVPNTunnel(options: ["vayuTunnelSecret": secret as NSData])
+                } else { try self.manager?.connection.startVPNTunnel() }
+                #else
+                try self.manager?.connection.startVPNTunnel()
+                #endif
+                self.refreshStatus(); self.armWatchdog()
+            }
             catch { self.record("Reconnect request failed", severity: .error); self.scheduleRetry() }
         }
     }

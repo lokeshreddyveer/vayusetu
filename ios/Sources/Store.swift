@@ -546,12 +546,15 @@ import VayuSetuCore
     func loadDNS(_ profile: DNSProfile) {
         guard !testing, !tunnel.running, !tunnel.busy else { return }
         do {
-            guard let data = try Vault.get("dns-" + profile.id.uuidString), let value = String(data: data, encoding: .utf8) else { throw AppIssue(message: "Resolver credential is missing. Save the endpoint again.") }
+            var stored = try Vault.get("dns-" + profile.id.uuidString)
+            // The built-in resolver's address is public, so it can always be written again if its Keychain entry is missing.
+            if stored == nil, profile.id == VayuSetuDNS.id { let again = Data(VayuSetuDNS.upstreamEndpoint.utf8); try Vault.put(again, account: "dns-" + profile.id.uuidString); stored = again }
+            guard let data = stored, let value = String(data: data, encoding: .utf8) else { throw AppIssue(message: "Resolver credential is missing. Save the endpoint again.") }
             endpoint = try DNSService.endpoint(value).absoluteString; dnsName = profile.name
             bootstrapAddresses = profile.bootstrapAddresses ?? []
             selectedDNS = profile.id; result = ""
             UserDefaults.standard.set(profile.id.uuidString, forKey: "selected-dns")
-        } catch { notice = "Could not load the selected resolver. Its endpoint may be missing from Keychain." }
+        } catch { notice = "Could not load the selected resolver. Its endpoint may be missing from Keychain. (\(error.localizedDescription))" }
     }
     func newDNS() {
         guard !testing, !tunnel.running, !tunnel.busy else { return }
@@ -869,9 +872,15 @@ extension AppStore {
         } catch { passed = false; notes.append("A normal name did not resolve through the tunnel.") }
         if isVayuSetuDNSSelected, let sample = blockedSampleName() {
             do {
-                let (_, reply) = try await LocalDNSProbe.exchange(domain: sample)
-                if reply.count >= 12, reply[3] & 0x0f == 3 { blockedChecked = true; notes.append("A listed ad/tracker name was blocked by the VayuSetu lists.") }
-                else { passed = false; notes.append("A listed ad/tracker name was not blocked. The lists may not have reached the tunnel.") }
+                // The filter rules are delivered to the tunnel just after it connects (on a Mac, by message), so look twice before judging.
+                var blocked = false
+                for attempt in 0..<3 {
+                    let (_, reply) = try await LocalDNSProbe.exchange(domain: sample)
+                    if reply.count >= 12, reply[3] & 0x0f == 3 { blocked = true; break }
+                    if attempt < 2 { tunnel.reloadDNSRules(); try? await Task.sleep(for: .seconds(3)) }
+                }
+                if blocked { blockedChecked = true; notes.append("\(sample) is on the VayuSetu lists and was blocked.") }
+                else { passed = false; notes.append("\(sample) is on the VayuSetu lists but was not blocked, so ad blocking is not active yet. The rules may not have reached the tunnel; reconnect DNS, or use Update now if a component is out of date.") }
             } catch { passed = false; notes.append("The blocked-name check got no answer.") }
         }
         dnsVerification = DNSVerification(date: Date(), passed: passed, blockedChecked: blockedChecked, detail: notes.joined(separator: " "))
@@ -1101,4 +1110,3 @@ extension AppStore {
         } catch { notice = "Saved configuration could not be recovered. Existing credentials were preserved." }
     }
 }
-

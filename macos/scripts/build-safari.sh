@@ -2,6 +2,7 @@
 # Builds the six Safari content-blocker extensions (ads, privacy, security, social, annoyances, custom) into the app bundle.
 # Each reads its own rules file from the shared App Group container; see Extensions/SafariContentBlocker.
 set -euo pipefail
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 cd "$(dirname "$0")/.."
 app="${1:?app bundle path required}"
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
@@ -13,7 +14,7 @@ for name in ads privacy security social annoyances custom; do
     ext="$app/Contents/PlugIns/$product.appex"
     rm -rf "$ext"; mkdir -p "$ext/Contents/MacOS" "$ext/Contents/Resources"
     for arch in arm64 x86_64; do
-        xcrun swiftc -swift-version 5 -g -O -sdk "$sdk" -target "$arch-apple-macos14.0" -module-cache-path build/module-cache -parse-as-library -emit-executable -application-extension -module-name "$product" ../Extensions/SafariContentBlocker/ContentBlockerRequestHandler.swift -o "build/safari/$product-$arch" -framework Foundation -framework UniformTypeIdentifiers -Xlinker -e -Xlinker _NSExtensionMain
+        xcrun swiftc -swift-version 5 -g -O -sdk "$sdk" -target "$arch-apple-macos14.0" -module-cache-path build/module-cache -parse-as-library -emit-executable -application-extension -module-name "$product" ../Extensions/SafariContentBlocker/ContentBlockerRequestHandler.swift -o "build/safari/$product-$arch" -framework Foundation -framework AppKit -framework SafariServices -framework UniformTypeIdentifiers -Xlinker -e -Xlinker _NSExtensionMain
     done
     xcrun lipo -create "build/safari/$product-arm64" "build/safari/$product-x86_64" -output "$ext/Contents/MacOS/$product"
     python3 - "$app" "$product" "$name" "$cap" <<'PY'

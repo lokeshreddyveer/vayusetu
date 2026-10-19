@@ -1,4 +1,4 @@
-VayuSetu for macOS 0.2.0
+VayuSetu for macOS 1.0
 
 Drag VayuSetu.app to Applications, then open it.
 Requires macOS 14 or later. Universal: Apple Silicon and Intel.

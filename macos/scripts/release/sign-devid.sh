@@ -22,7 +22,11 @@ cp build/auto-sign/Tunnel.plist "$ext0/Contents/Info.plist"
 for name in Ads Privacy Security Social Annoyances Custom; do cp "build/auto-sign/Safari$name.plist" "$app/Contents/PlugIns/VayuSetuSafari$name.appex/Contents/Info.plist"; done
 ext="$app/Contents/Library/SystemExtensions/app.vayusetu.macos.tunnel.systemextension"
 profile() { cp "build/devid-profiles/$1.provisionprofile" "$2/Contents/embedded.provisionprofile"; }
-sign() { codesign --force --timestamp --options runtime --entitlements "$2" --sign "$identity" "$1"; }
+# Require a secure timestamp; an untimestamped extension cannot be activated.
+# Specify Apple's HTTP RFC 3161 endpoint explicitly for compatibility with codesign.
+sign() {
+    codesign --force --timestamp=http://timestamp.apple.com/ts01 --options runtime --entitlements "$2" --sign "$identity" "$1"
+}
 # A system extension's Mach service name must start with an app group the extension belongs to; the tunnel's name is
 # "<team>.app.vayusetu.macos.tunnel", so it needs the group "<team>.app.vayusetu.macos". Without it macOS refuses to install the extension.
 python3 - "$root" <<'TENT'
@@ -46,7 +50,7 @@ group = team + '.app.vayusetu.filter'
 Path(root/'Filter.entitlements').write_bytes(plistlib.dumps({
     'com.apple.application-identifier': team + '.app.vayusetu.macos.filter', 'com.apple.developer.team-identifier': team,
     'com.apple.developer.networking.networkextension': ['content-filter-provider-systemextension'],
-    'com.apple.security.application-groups': [group]}))   # not sandboxed: it has to inspect other apps' code signatures
+    'com.apple.security.application-groups': [group]}))
 host = plistlib.loads(Path('build/auto-sign/Host.entitlements').read_bytes())
 ne = host.setdefault('com.apple.developer.networking.networkextension', [])
 if 'content-filter-provider-systemextension' not in ne: ne.append('content-filter-provider-systemextension')
@@ -69,7 +73,7 @@ ditto "$app" "$root/DMG/VayuSetu.app"; ln -sfn /Applications "$root/DMG/Applicat
 dmg="dist/release/VayuSetu-$version-$build-macOS.dmg"
 rm -f "$dmg"
 hdiutil create -volname 'VayuSetu' -srcfolder "$root/DMG" -format UDZO -ov "$dmg"
-codesign --force --timestamp --sign "$identity" "$dmg"
+codesign --force --timestamp=http://timestamp.apple.com/ts01 --sign "$identity" "$dmg"
 hdiutil verify "$dmg"
 shasum -a 256 "$dmg" > "$dmg.sha256"
 python3 - "$app" <<'CHECK'

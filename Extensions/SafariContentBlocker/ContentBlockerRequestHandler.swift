@@ -1,4 +1,8 @@
 import Foundation
+#if os(macOS)
+import AppKit
+import SafariServices
+#endif
 import UniformTypeIdentifiers
 
 final class ContentBlockerRequestHandler: NSObject, NSExtensionRequestHandling {
@@ -23,8 +27,10 @@ final class ContentBlockerRequestHandler: NSObject, NSExtensionRequestHandling {
     }
 
     func beginRequest(with context: NSExtensionContext) {
+        NSLog("VayuSetu content blocker \(fileName): request received")
         do {
             guard let container = container() else {
+                NSLog("VayuSetu content blocker \(fileName): the shared container is unavailable")
                 throw NSError(domain: "VayuSetu.Safari", code: 1, userInfo: [NSLocalizedDescriptionKey: "Shared rules container unavailable."])
             }
             let source = container.appendingPathComponent(fileName)
@@ -47,8 +53,11 @@ final class ContentBlockerRequestHandler: NSObject, NSExtensionRequestHandling {
             guard let provider = NSItemProvider(contentsOf: snapshot) else { throw NSError(domain: "VayuSetu.Safari", code: 4) }
             let item = NSExtensionItem(); item.attachments = [provider]
             log("served \(size) bytes from \(fileName)")
-            context.completeRequest(returningItems: [item])
+            NSLog("VayuSetu content blocker \(fileName): serving \(size) bytes")
+            let name = fileName
+            context.completeRequest(returningItems: [item]) { expired in NSLog("VayuSetu content blocker \(name): request completed (expired: \(expired))") }
         } catch {
+            NSLog("VayuSetu content blocker \(fileName): failed: \(error.localizedDescription)")
             log("failed: \(error.localizedDescription)")
             context.cancelRequest(withError: NSError(domain: "VayuSetu.Safari", code: 5, userInfo: [NSLocalizedDescriptionKey: "Rules could not be loaded. Reload from VayuSetu."]))
         }

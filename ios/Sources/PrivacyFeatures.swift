@@ -192,7 +192,7 @@ struct FilterConfiguration: Codable {
 }
 private struct SafariUpdateJournal: Codable { let previous: [String: Data]; let pendingGeneration: UUID }
 /// What the app last observed about one Safari extension.
-struct SafariExtensionState: Equatable { var enabled: Bool?; var reloaded = false; var failure: String? }
+struct SafariExtensionState: Equatable { var enabled: Bool?; var reloaded = false; var failure: String?; /** Blocking rules in the slice last written for this extension (Safari allows 150,000 each). */ var rules: Int? }
 private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     static func valid(_ url: URL) -> Bool { url.scheme == "https" && url.user == nil && url.password == nil && url.host != nil && url.fragment == nil }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -930,6 +930,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
             previous[id] = old
             if old != compiled[id]?.data { changed.append(id) }
         }
+        for id in SafariExtensionID.allCases { extensionStates[id, default: SafariExtensionState()].rules = compiled[id]?.applied }
         let journalURL = directory.appendingPathComponent("safari-update-journal.json")
         try JSONEncoder().encode(SafariUpdateJournal(previous: Dictionary(uniqueKeysWithValues: changed.map { ($0.rawValue, previous[$0] ?? placeholder) }), pendingGeneration: next.generation!)).write(to: journalURL, options: .atomic)
         // Each extension is its own transaction: write, reload, and restore that one extension if its reload fails.
@@ -1037,6 +1038,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         let once = Once(); let identifier = identifier(for: id)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             SFContentBlockerManager.reloadContentBlocker(withIdentifier: identifier) { error in
+                if let error = error as NSError? { NSLog("VayuSetu Safari reload %@ failed: %@ %ld %@", identifier, error.domain, error.code, error.localizedDescription) }
                 guard once.claim() else { return }
                 if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: ()) }
             }

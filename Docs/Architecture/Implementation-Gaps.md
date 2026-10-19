@@ -1,6 +1,6 @@
 # VayuSetu capability status
 
-Updated 2026-10-11. Blueprint-1.0.md is the target roadmap; it is not a claim that every future feature is available. Current releases: iOS 0.6.0/build 10 and macOS 0.3.0/build 3. Both platforms share profile, credential, connection, diagnostics and backup code.
+Updated 2026-10-18. Blueprint-1.0.md is the target roadmap; it is not a claim that every future feature is available. The macOS source is 1.0/build 20; build 19 is a separate notarized local DMG and does not contain the build 20 security fixes. Both platforms share profile, credential, connection, diagnostics and backup code.
 
 | Area | Implemented | Still required |
 | --- | --- | --- |
@@ -16,9 +16,9 @@ Updated 2026-10-11. Blueprint-1.0.md is the target roadmap; it is not a claim th
 | Diagnostics | Explicit DNS and public-IP checks; handshake/counters; network families and metered/constrained state; five-request HTTPS quality check; mean and timing variation; bounded 30-check history and sanitized JSON export | Independent DNS/leak/exit-provider evidence, actual packet-loss probes, captive-portal assessment, baseline comparison |
 | Traffic | Real sampled rates and counters; 120-point live charts; bounded session history; per-profile completed-session totals; configurable data-threshold alert with opt-in notifications | Background accounting accuracy, monthly budgets, health trends and OS/provider billing reconciliation |
 | Logs | Severity/category/session IDs, OSLog, 500-event persistent local ring, 100-event display, text filtering, sanitized JSON export and local deletion | Dedicated severity/category filters, configurable retention and diagnostic bundle integration |
-| Secrets and backup | Device-local shared Keychain; AES-256-GCM backups; PBKDF2-HMAC-SHA256 at 600,000 iterations; random 32-byte salt; authenticated format/salt; bounded file sizes; additive restore; interrupted-restore rollback journal | Device interaction tests for Keychain failures, interruption and export/import; independent security review |
-| Automation | On demand, connect on launch, app-active retry, restore selections, macOS login and wake handling; opt-in free-account renewal tooling | Trusted Wi-Fi, per-network selection, scheduled connection policies and configurable security profiles |
-| Packaging | Paid-team automatic iOS archive/export; universal Developer ID macOS app/extension signing and DMG; entitlement/profile validation; checksums | Mac notarization/stapling, clean installs/approvals and App Store/TestFlight release gates |
+| Secrets and backup | Device-local shared Keychain; macOS build 20 source passes tunnel credentials only during explicit starts and removes the older saved-preferences copy on app load; AES-256-GCM backups; PBKDF2-HMAC-SHA256 at 600,000 iterations; random 32-byte salt; authenticated format/salt; bounded file sizes; additive restore; interrupted-restore rollback journal | Mac upgrade migration and tunnel-start device tests; Keychain failure, interruption and export/import tests; independent security review |
+| Automation | iOS on demand; connect on launch, app-active retry, restore selections, macOS login and wake handling; opt-in free-account renewal tooling | macOS unattended WireGuard starts require a secure credential channel; trusted Wi-Fi, per-network selection, scheduled connection policies and configurable security profiles |
+| Packaging | Paid-team automatic iOS archive/export; universal Developer ID macOS app/extension signing and DMG; entitlement/profile validation; checksums; build 19 DMG stapled and validated | Build 20 signing and notarization, clean installs/approvals and App Store/TestFlight release gates |
 | CI | Local scripts and owner-operated iOS workflow definition | Hosted/self-hosted execution evidence, macOS CI, release approvals and signed update mechanism |
 | Future protocols | WireGuard only | OpenVPN, IKEv2 where feasible, provider accounts, DoQ, multihop and additional enterprise management |
 
@@ -26,7 +26,7 @@ Updated 2026-10-11. Blueprint-1.0.md is the target roadmap; it is not a claim th
 
 A successful build or provisioning profile does not prove a VPN path. An OS connected state does not prove DNS transport, resolver identity, leak prevention or filtering. HTTPS timings include TLS/server processing and failed requests are **not packet loss**. NXDOMAIN is consistent with either filtering or a nonexistent name. A/AAAA probes use the app's current route and do not change system DNS.
 
-The previously installed iPhone build was rejected before app launch because Apple's online profile-validation agent reported no network route. This is separate from build/signing validation. The new DNS/UI features still need device interaction testing once the phone has an internet route and is connected/unlocked. macOS notarization is not complete.
+The previously installed iPhone build was rejected before app launch because Apple's online profile-validation agent reported no network route. This is separate from build/signing validation. The new DNS/UI features still need device interaction testing once the phone has an internet route and is connected/unlocked. The build 19 macOS DMG has a validated stapled ticket; build 20 has not been notarized or tested on a live tunnel.
 
 ## Storage and restore
 

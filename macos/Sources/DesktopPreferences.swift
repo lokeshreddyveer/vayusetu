@@ -20,8 +20,9 @@ struct MenuControls: View {
     @ObservedObject var store: AppStore
     @ObservedObject var extensions: ExtensionManager
     @ObservedObject var tunnel: TunnelController
+    @ObservedObject var filter: FilterClient
     @Environment(\.openWindow) private var openWindow
-    init(store: AppStore, extensions: ExtensionManager) { self.store = store; self.extensions = extensions; self.tunnel = store.tunnel }
+    init(store: AppStore, extensions: ExtensionManager, filter: FilterClient) { self.store = store; self.extensions = extensions; self.filter = filter; self.tunnel = store.tunnel }
     var body: some View {
         Text("VayuSetu · \(tunnel.statusText)")
         Text(store.active?.name ?? "No VPN profile selected")
@@ -35,8 +36,71 @@ struct MenuControls: View {
         Toggle("Encrypted DNS", isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.dns) } } })).disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
         Toggle("Adblock in Safari", isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { _ in Task { await store.togglePill(.adblock) } }))
         Divider()
+        networkSection
+        Divider()
         Button("Open VayuSetu") { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) }
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
+    }
+    /// The network filter at a glance: what happened in the last minute, the latest blocks, and quick mode changes.
+    @ViewBuilder private var networkSection: some View {
+        if filter.status == .running {
+            let minute = filter.flows.filter { $0.time > Date().addingTimeInterval(-60) }
+            let blocked = minute.filter { $0.verdict == .block }.count
+            Text("Network filter · \(filter.settings.mode.title) · \(minute.count - blocked) allowed, \(blocked) blocked in the last minute")
+            if !filter.pending.isEmpty { Button("\(filter.pending.count) connection\(filter.pending.count == 1 ? "" : "s") waiting for you…") { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } }
+            ForEach(Array(filter.flows.filter { $0.verdict == .block }.suffix(5).reversed()), id: \.id) { flow in
+                Text("Blocked: \(flow.appName) → \(flow.host)")
+            }
+            Menu("Filter mode") {
+                ForEach(FilterMode.allCases) { mode in Button((filter.settings.mode == mode ? "✓ " : "") + mode.title) { filter.setMode(mode) } }
+            }
+            if !filter.profiles.isEmpty {
+                Menu("Network profile") { ForEach(filter.profiles) { profile in Button((filter.activeProfile == profile.name ? "✓ " : "") + profile.name) { filter.applyProfile(named: profile.name) } } }
+            }
+        } else {
+            Text("Network filter · \(filter.status == .off ? "off" : "not running")")
+        }
+    }
+}
+
+import Darwin
+
+/// Writes a short trace to ~/Library/Logs/VayuSetu/ when the app crashes, because macOS does not always keep a report. The trace has function
+/// names and no personal data. Nothing is sent anywhere.
+enum CrashTrace {
+    nonisolated(unsafe) private static var descriptor: Int32 = -1
+    nonisolated(unsafe) private static var stack = [UInt8](repeating: 0, count: 256 * 1024)
+    static func install() {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/VayuSetu", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = "crash-" + ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-") + ".txt"
+        descriptor = open(folder.appendingPathComponent(name).path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        // A handler needs its own stack to run after a stack overflow.
+        stack.withUnsafeMutableBytes { raw in
+            var alt = stack_t(ss_sp: raw.baseAddress, ss_size: raw.count, ss_flags: 0)
+            sigaltstack(&alt, nil)
+        }
+        for signalNumber in [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE] {
+            var action = sigaction()
+            action.__sigaction_u.__sa_sigaction = { number, _, _ in
+                let header = "VayuSetu crashed, signal \(number)\n"
+                _ = header.withCString { write(CrashTrace.descriptor, $0, strlen($0)) }
+                var frames = [UnsafeMutableRawPointer?](repeating: nil, count: 64)
+                let count = backtrace(&frames, 64)
+                backtrace_symbols_fd(&frames, count, CrashTrace.descriptor)
+                signal(number, SIG_DFL); raise(number)
+            }
+            action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND
+            sigemptyset(&action.sa_mask)
+            sigaction(signalNumber, &action, nil)
+        }
+        NSSetUncaughtExceptionHandler { exception in
+            let text = "Uncaught exception: \(exception.name.rawValue) \(exception.reason ?? "")\n" + exception.callStackSymbols.joined(separator: "\n") + "\n"
+            _ = text.withCString { write(CrashTrace.descriptor, $0, strlen($0)) }
+        }
+        // An empty file means no crash happened; remove earlier empty ones and keep the last ten traces.
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey, .creationDateKey])) ?? []).filter { $0.lastPathComponent.hasPrefix("crash-") }
+        for file in files where file.lastPathComponent != name && ((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) == 0 { try? FileManager.default.removeItem(at: file) }
     }
 }

@@ -477,6 +477,7 @@ struct VSDNSDiagnosticsScreen: View {
     }
     var body: some View {
         VSCardList {
+            VSSection("Recent lookups") { VSLookupsPanel(tunnel: tunnel).padding(.vertical, 6) }
             VSSection("Runtime") {
                 VSRow(title: "Active DNS runtime", value: runtimeName)
                 VSRow(title: "Selected resolver", value: store.endpoint.isEmpty ? "None" : store.dnsName)
@@ -799,6 +800,48 @@ extension VSDNSScreen {
                 }
             }.vsList().vsHeader("DNS with a VPN")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { VSCloseButton(label: "Done") { showingCompatibility = false } } }
+        }
+    }
+}
+
+
+/// Recent DNS lookups handled by the local DNS tunnel: what was asked, and whether it was blocked. Switched off by default, held in the
+/// tunnel's memory only, and dropped when it is switched off or the tunnel stops.
+struct VSLookupsPanel: View {
+    @ObservedObject var tunnel: TunnelController
+    @State private var search = ""
+    @State private var blockedOnly = false
+    private var shown: [DNSQueryEntry] {
+        let all = tunnel.lookups.reversed().filter { !blockedOnly || $0.result == "blocked" }
+        return Array((search.isEmpty ? all : all.filter { $0.name.localizedCaseInsensitiveContains(search) }).prefix(150))
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(get: { tunnel.lookupsOn }, set: { tunnel.setLookups($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep a list of recent lookups").font(.system(size: 14, weight: .medium))
+                    Text("Shows the last few hundred names this device asked for and which were blocked. Kept in memory while the tunnel runs, never saved, and cleared when you switch this off.").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            if !tunnel.lookupsAvailable {
+                Text("Available while the local DNS tunnel is connected.").font(.system(size: 12)).foregroundStyle(.secondary)
+            } else if tunnel.lookupsOn {
+                HStack(spacing: 10) {
+                    TextField("Search names", text: $search).textFieldStyle(.roundedBorder)
+                    Toggle("Blocked only", isOn: $blockedOnly).font(.system(size: 12)).fixedSize()
+                }
+                if shown.isEmpty { Text(tunnel.lookups.isEmpty ? "Waiting for lookups…" : "Nothing matches.").font(.system(size: 12)).foregroundStyle(.secondary) }
+                ForEach(shown) { entry in
+                    HStack(spacing: 8) {
+                        Image(systemName: entry.result == "blocked" ? "xmark.circle.fill" : entry.result == "failed" ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(entry.result == "blocked" ? Color.red : entry.result == "failed" ? Color.orange : Color.green)
+                        Text(entry.name).font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        Spacer(minLength: 4)
+                        Text(entry.type).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        Text(entry.time, format: .dateTime.hour().minute().second()).font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 }

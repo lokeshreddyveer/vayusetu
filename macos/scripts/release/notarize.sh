@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-version=$(python3 -c 'import plistlib; print(plistlib.load(open("build/release/VayuSetu.app/Contents/Info.plist","rb"))["CFBundleShortVersionString"])')
-dmg="dist/release/VayuSetu-$version-macOS.dmg"
+dmg="${1:?Pass the exact signed DMG path, for example dist/release/VayuSetu-1.0-20-macOS.dmg}"
+[[ -f "$dmg" ]] || { echo "DMG not found: $dmg" >&2; exit 2; }
 auth_args=()
 if [[ -n "${VAYU_ASC_API_KEY_PATH:-}" ]]; then
     : "${VAYU_ASC_API_KEY_ID:?Set key ID}"; : "${VAYU_ASC_ISSUER_ID:?Set issuer ID}"

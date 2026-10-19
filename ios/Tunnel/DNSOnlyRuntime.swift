@@ -315,10 +315,25 @@ final class DNSOnlyRuntime: @unchecked Sendable {
     private var stopped = false
     private var counters = DNSOnlyCounters()
     private var rules: DNSRuleSnapshot?
+    private var logging = false
+    private var queryLog: [DNSQueryEntry] = []
+    private var nextLogID: UInt64 = 1
+    static let maximumLogged = 400
     /// `rules == nil` means filtering is off for this provider; an empty snapshot means it is on with nothing loaded.
     init(upstream: any DNSUpstreaming, rules: DNSRuleSnapshot? = nil, write: @escaping (Data) -> Void) { self.upstream = upstream; self.rules = rules; self.write = write; counters.rules = UInt64(rules?.count ?? 0) }
     var snapshot: DNSOnlyCounters { lock.lock(); defer { lock.unlock() }; return counters }
     func stop() { lock.lock(); stopped = true; lock.unlock() }
+    /// The lookup list lives in memory only; switching it off discards it.
+    func setLogging(_ on: Bool) { lock.lock(); logging = on; if !on { queryLog.removeAll() }; lock.unlock() }
+    func recentQueries(after id: UInt64) -> [DNSQueryEntry] { lock.lock(); defer { lock.unlock() }; return queryLog.filter { $0.id > id } }
+    /// Call with the lock held.
+    private func note(_ name: String, _ type: UInt16, _ result: String) {
+        guard logging else { return }
+        let label: String
+        switch type { case 1: label = "A"; case 28: label = "AAAA"; case 5: label = "CNAME"; case 15: label = "MX"; case 16: label = "TXT"; case 65: label = "HTTPS"; case 12: label = "PTR"; default: label = "\(type)" }
+        queryLog.append(DNSQueryEntry(id: nextLogID, time: Date(), name: name, type: label, result: result)); nextLogID += 1
+        if queryLog.count > Self.maximumLogged { queryLog.removeFirst(queryLog.count - Self.maximumLogged) }
+    }
     /// Atomically swaps the filter snapshot; in-flight queries keep the decision they already made.
     func replaceRules(_ new: DNSRuleSnapshot?) { lock.lock(); rules = new; counters.rules = UInt64(new?.count ?? 0); lock.unlock() }
     func handle(_ packet: Data) {
@@ -330,10 +345,11 @@ final class DNSOnlyRuntime: @unchecked Sendable {
         if let rules, let question = DNSPacketCodec.question(of: query.payload), rules.decide(question.name) == .block,
            let answer = DNSPacketCodec.blockedResponse(for: query.payload, questionEnd: question.end),
            let reply = DNSPacketCodec.response(for: query, payload: answer) {
-            counters.blocked += 1; if rules.isThreat(question.name) { counters.threats += 1 }; lock.unlock(); write(reply); return
+            counters.blocked += 1; if rules.isThreat(question.name) { counters.threats += 1 }; note(question.name, question.type, "blocked"); lock.unlock(); write(reply); return
         }
         if inFlight >= Self.maximumInFlight { counters.dropped += 1; lock.unlock(); return }
         inFlight += 1; lock.unlock()
+        let asked = DNSPacketCodec.question(of: query.payload)
         Task.detached { [self] in
             let answer: Data?
             var ok = true
@@ -341,10 +357,12 @@ final class DNSOnlyRuntime: @unchecked Sendable {
             catch { ok = false; answer = DNSPacketCodec.servfail(for: query.payload) }
             // An alias that leads to a blocked name is blocked too (tracker hidden behind a first-party name).
             if ok, let answer, let blockedReply = uncloakedAnswer(for: query, answer: answer) {
+                if let asked { lock.lock(); note(asked.name, asked.type, "blocked"); lock.unlock() }
                 if finishBlocked(), let packet = DNSPacketCodec.response(for: query, payload: blockedReply) { write(packet) }
                 return
             }
             // A query counts as answered only after a validated upstream reply exists.
+            if let asked { lock.lock(); note(asked.name, asked.type, ok ? "answered" : "failed"); lock.unlock() }
             guard complete(answered: ok), let answer else { return }
             if let packet = DNSPacketCodec.response(for: query, payload: answer) { write(packet) }
             else if answer.count > DNSPacketCodec.maximumPayload, let cut = DNSPacketCodec.truncated(for: query.payload),
