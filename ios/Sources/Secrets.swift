@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import CryptoKit
+import os
 
 enum Vault {
     #if os(macOS)
@@ -271,9 +272,15 @@ struct DNSRuleSnapshot: Equatable {
 enum DNSRuleStore {
     static let fileName = "dns-rules.v1.bin"
     static var url: URL? {
-        guard let group = Bundle.main.object(forInfoDictionaryKey: "VayuAppGroup") as? String,
-              let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
-        return container.appendingPathComponent(fileName)
+        if let group = Bundle.main.object(forInfoDictionaryKey: "VayuAppGroup") as? String,
+           let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) { return container.appendingPathComponent(fileName) }
+        #if os(macOS)
+        // The Mac tunnel is a system extension running as root, and macOS gives it no App Group container. It keeps its own copy of the
+        // snapshot in its private temporary folder; the app sends the rules in a message each time it connects or the lists change.
+        // (Only the tunnel uses this: the app itself always has the group container.)
+        if Bundle.main.bundlePath.contains(".systemextension") { return FileManager.default.temporaryDirectory.appendingPathComponent(fileName) }
+        #endif
+        return nil
     }
     static func write(_ snapshot: DNSRuleSnapshot) throws {
         guard let url else { throw AppIssue(message: "App Group access is unavailable. Rebuild with the tunnel's provisioning.") }
@@ -419,10 +426,29 @@ struct TunnelStartupEvent: Codable {
     }
     static func record(_ stage: Stage, error: Error? = nil) {
         let ns = error.map { $0 as NSError }
+        #if os(macOS)
+        // A macOS system extension does not have the host app's user Keychain
+        // session. Keep the extension's startup trail in unified logging rather
+        // than repeatedly opening Keychain IPC and turning a diagnostic write
+        // into a tunnel-start side effect.
+        // The system hides NSLog values, so this uses the logger with public values. Only the stage, the error domain and code,
+        // and VayuSetu's own plain-language message are written: no keys, addresses or resolver names.
+        let log = Logger(subsystem: "app.vayusetu.tunnel", category: "startup")
+        if let ns {
+            let message = (error as? AppIssue)?.message ?? ""
+            log.error("startup \(stage.rawValue, privacy: .public) failed \(sanitizedDomain(ns.domain), privacy: .public):\(ns.code, privacy: .public) \(message, privacy: .public)")
+        } else {
+            log.notice("startup \(stage.rawValue, privacy: .public)")
+        }
+        #endif
         var events: [Self] = []
+        #if os(macOS)
+        return
+        #else
         if let data = try? Vault.get(account), data.count <= 4096 { events = (try? JSONDecoder().decode([Self].self, from: data)) ?? [] }
         events.append(Self(date: Date(), stage: stage, errorDomain: ns.map { sanitizedDomain($0.domain) }, errorCode: ns?.code))
         if let data = try? JSONEncoder().encode(Array(events.suffix(10))) { try? Vault.put(data, account: account) }
+        #endif
     }
     static var report: String {
         guard let data = try? Vault.get(account), data.count <= 4096, let events = try? JSONDecoder().decode([Self].self, from: data) else { return "No startup breadcrumbs available." }

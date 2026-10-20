@@ -32,9 +32,9 @@ struct MenuControls: View {
             else { extensions.activate { Task { if await store.powerTapped() { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } } } }
         }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting || store.protectionBusy)
         Divider()
-        Toggle("VPN", isOn: Binding(get: { store.vpnPill == .active || store.vpnPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.vpn) } } })).disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
-        Toggle("Encrypted DNS", isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.dns) } } })).disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
-        Toggle("Adblock in Safari", isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { _ in Task { await store.togglePill(.adblock) } }))
+        Toggle(isOn: Binding(get: { store.vpnPill == .active || store.vpnPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.vpn) } } })) { Label("VPN", systemImage: "lock.shield") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle(isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.dns) } } })) { Label("Encrypted DNS", systemImage: "network") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle(isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { _ in Task { await store.togglePill(.adblock) } })) { Label("Adblock in Safari", systemImage: "hand.raised") }
         Divider()
         networkSection
         Divider()
@@ -47,6 +47,9 @@ struct MenuControls: View {
         if filter.status == .running {
             let minute = filter.flows.filter { $0.time > Date().addingTimeInterval(-60) }
             let blocked = minute.filter { $0.verdict == .block }.count
+            let received = minute.reduce(Int64(0)) { $0 + ($1.bytesIn ?? 0) }
+            let sent = minute.reduce(Int64(0)) { $0 + ($1.bytesOut ?? 0) }
+            Label("Speed · ↓ (Self.rate(received / 60)) · ↑ (Self.rate(sent / 60))", systemImage: "arrow.up.arrow.down.circle")
             Text("Network filter · \(filter.settings.mode.title) · \(minute.count - blocked) allowed, \(blocked) blocked in the last minute")
             if !filter.pending.isEmpty { Button("\(filter.pending.count) connection\(filter.pending.count == 1 ? "" : "s") waiting for you…") { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } }
             ForEach(Array(filter.flows.filter { $0.verdict == .block }.suffix(5).reversed()), id: \.id) { flow in
@@ -61,6 +64,12 @@ struct MenuControls: View {
         } else {
             Text("Network filter · \(filter.status == .off ? "off" : "not running")")
         }
+    }
+    private static func rate(_ bytesPerSecond: Int64) -> String {
+        let value = Double(max(0, bytesPerSecond))
+        if value >= 1_000_000 { return String(format: "%.1f MB/s", value / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.1f KB/s", value / 1_000) }
+        return "(Int(value)) B/s"
     }
 }
 

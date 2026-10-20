@@ -41,7 +41,13 @@ struct MacProfiles: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "conf") ?? .plainText, .plainText]) { result in
             do {
                 let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                draft = VSProfileDraft(name: url.deletingPathExtension().lastPathComponent, text: try WireGuardImportReview.read(url))
+                // Keep the security-scoped URL alive while reading, then send the
+                // contents through the review editor. This gives the user the exact
+                // parser error and avoids a half-saved Keychain/profile pair.
+                let text = try WireGuardImportReview.read(url)
+                let importedName = url.deletingPathExtension().lastPathComponent
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                draft = VSProfileDraft(name: String((importedName.isEmpty ? "Imported profile" : importedName).prefix(80)), text: text)
             } catch { store.notice = (error as? AppIssue)?.message ?? "Profile import did not finish." }
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .plainText, defaultFilename: "VayuSetu-redacted.conf") { _ in document = EncryptedBackupDocument() }

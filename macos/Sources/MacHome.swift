@@ -107,8 +107,8 @@ struct MacHome: View {
     }
     private func protection(_ title: String, icon: String, state: PillState, which: ProtectionPill, needsVPN: Bool) -> some View {
         MacRow(icon: icon, title: title, detail: word(state), tint: color(state)) {
-            Toggle("", isOn: Binding(get: { state != .off }, set: { _ in
-                if needsVPN { activate { Task { await store.togglePill(which) } } } else { Task { await store.togglePill(which) } }
+            Toggle("", isOn: Binding(get: { state != .off }, set: { enabled in
+                if needsVPN { activate { Task { await store.setPill(which, enabled: enabled) } } } else { Task { await store.setPill(which, enabled: enabled) } }
             })).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel(title)
                 .disabled(store.protectionBusy || tunnel.busy || (needsVPN && (!TunnelController.available || !tunnel.ready)))
         }

@@ -98,6 +98,9 @@ import Foundation
         var incoming = rule("*", "*", .block); incoming.direction = .inbound
         check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", outbound: false, rules: [incoming], settings: allowAll).action == .block)
         check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", outbound: true, rules: [incoming], settings: allowAll).action == .allow)
+        var signed = rule("a", "x.com", .block); signed.team = "TEAM"; signed.parent = "launcher"
+        check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", team: "TEAM", parent: "launcher", rules: [signed], settings: allowAll).action == .block)
+        check(NetRuleEngine.decide(app: "a", host: "x.com", port: "1", team: "OTHER", parent: "launcher", rules: [signed], settings: allowAll).action == .allow)
         // List parsing: hosts files, plain names, ad-blocker lines, comments
         let parsed = NetListParser.parse("# comment\n127.0.0.1 localhost\n0.0.0.0 ads.example.com tracker.example.net # inline\nplain.org\n||adblock.io^\n||path.io/x^\n@@||allowed.io^\n! note\ncom\n")
         check(parsed == ["ads.example.com", "tracker.example.net", "plain.org", "adblock.io"])

@@ -18,11 +18,11 @@ It does not sell a VPN service and runs no servers of its own. You bring the Wir
 - **Three protections, one place.** VPN, encrypted DNS and Safari ad blocking can be used alone or combined.
 - **Honest status.** A switch turns green only when VayuSetu has seen evidence that the protection works. Checks say what they observed, and what no app can prove.
 
-> **Status.** VayuSetu 1.0 is working software under active development. The Mac build is signed and notarized by Apple. The iPhone app was submitted to App Review and is waiting on a store requirement: Apple only accepts VPN apps from an organization developer account, so the iPhone app's release path is being decided. VayuSetu has not had an independent security audit, and the tunnel has not yet been validated across every network transition. The newest Mac features (the network filter's lists, modes, map and connection card) are built and tested at the code level and are being proven in daily use; each is marked below. See [What VayuSetu cannot do](#what-vayusetu-cannot-do).
+> **Status.** VayuSetu 1.0 is working software under active development. The Mac build is signed and notarized by Apple, and VPN, encrypted DNS, and the two combined have been tested on a real Mac. The iPhone app was submitted to App Review and is waiting on a store requirement: Apple only accepts VPN apps from an organization developer account, so its release path is being decided. VayuSetu has not had an independent security audit. The newest Mac features (the network filter's lists, modes, map and connection card, and the Security Center) are covered by automated tests and used daily, but have not been proven against heavy real-world traffic; each is marked below. See [What VayuSetu cannot do](#what-vayusetu-cannot-do).
 
 ## Contents
 
-[Download and install](#download-and-install) · [A tour of the app](#a-tour-of-the-app) · [The Mac network filter in depth](#the-mac-network-filter-in-depth) · [Keeping the Mac app healthy](#keeping-the-mac-app-healthy) · [Controlling VayuSetu from scripts](#controlling-vayusetu-from-scripts-and-shortcuts) · [How it works](#how-it-works) · [Privacy](#privacy) · [What VayuSetu cannot do](#what-vayusetu-cannot-do) · [Questions](#questions) · [Source code and license](#source-code-and-license) · [Support](#support) · [Credits](#credits-and-legal)
+[Download and install](#download-and-install) · [A tour of the app](#a-tour-of-the-app) · [The Mac network filter in depth](#the-mac-network-filter-in-depth) · [Keeping the Mac app healthy](#keeping-the-mac-app-healthy) · [Controlling VayuSetu from scripts](#controlling-vayusetu-from-scripts-and-shortcuts) · [Security Center and managed policy](#security-center-and-managed-policy) · [How it works](#how-it-works) · [Privacy](#privacy) · [What VayuSetu cannot do](#what-vayusetu-cannot-do) · [Questions](#questions) · [Source code and license](#source-code-and-license) · [Support](#support) · [Credits](#credits-and-legal)
 
 ## Download and install
 
@@ -198,7 +198,7 @@ Permissions, protection modes, Privacy Lock, connect on launch and automatic rec
 
 ### VayuSetu for Mac
 
-The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock, Network and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
+The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock, Network, Security Center and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
 
 - **Home:** the power button and the three protections on the left; connection, live traffic, DNS activity and status on the right.
 - **VPN Profiles:** a list with a details pane, connect, edit, duplicate, export without secrets, and QR export.
@@ -206,6 +206,7 @@ The Mac app is designed for the desktop, not stretched from the phone. A sidebar
 - **Adblock:** the six Safari extensions with their on/off state, whether Safari has loaded the rules, and how many of Safari's 150,000 rules each one uses.
 - **Menu bar:** switches for VPN, Encrypted DNS and Adblock, a power item, and the network filter at a glance: allowed and blocked in the last minute, the latest blocks, connections waiting for you, and quick switches for the filter's mode and profile.
 - **Keyboard:** ⇧⌘P turns protection on or off, ⇧⌘M opens the mode chooser.
+- **One window.** Links, the menu bar's *Open VayuSetu* and the Dock all bring back the same window; VayuSetu never opens a second copy.
 - **System extensions:** the WireGuard tunnel and the network filter run as macOS system extensions, signed and notarized by Apple.
 - **Network:** a firewall-style page that shows which apps connect where and lets you decide. It has its own section below.
 
@@ -280,6 +281,8 @@ Save your current rules and settings as a named **profile** (Home, Work, Public 
 
 System extensions are installed by macOS, not by the app, and an old version can keep running after the app is updated. VayuSetu checks every 90 seconds which version of the tunnel and the network filter is installed against the version inside the app. When one is out of date, waiting for your approval, or switched off in System Settings, a banner appears on every page with one **Update now** button. Updating the tunnel disconnects it for a moment, and macOS may ask you to approve.
 
+**VPN plus DNS starts reliably.** Starting a VPN while a DNS tunnel is running used to stall, because the tunnel looked up the VPN server's name through a DNS service that was in the middle of being replaced. The app now looks up the server's address first, with a four-second limit, and hands the tunnel the address; your saved profile is not changed. On the Mac the tunnel also keeps its own copy of the DNS filter rules, because macOS gives a system extension no shared folder, and the app sends the rules to it whenever it connects or your lists change.
+
 The DNS check does not stop at "the tunnel is up". It resolves a normal name and a name that is on your block lists, retries while the rules reach the tunnel, and says in plain words if the blocked name was **not** blocked.
 
 If the Mac app ever crashes, it writes a short trace of function names (no personal data, nothing sent anywhere) to `~/Library/Logs/VayuSetu/`, because macOS does not always keep a crash report.
@@ -299,6 +302,12 @@ open "vayusetu://network/mode/passive"       # normal, passive or blockall
 ```
 
 On the iPhone, **Shortcuts** and **Siri** can turn DNS-only, VPN and ad blocking on and off.
+
+## Security Center and managed policy
+
+**Security Center (Mac).** A page that summarizes the connections the network filter has recorded: how many connections, apps, destinations and blocks, and a short review that flags things worth a look, such as apps with no verified signer, a burst of connections in five minutes, or blocked activity. It uses only metadata the filter already has (app, destination, signer, parent process, verdict and time). It does not look at the contents of traffic, and it says that it does not claim to find every threat. **Security insights (iPhone)** shows the observed state of each protection, with the evidence behind it and its limits.
+
+**Building blocks for managed deployments (not yet in the app).** The shared core library contains tested code for a **signed policy file** that clients verify before applying and that lists only what a client can actually enforce, a **tamper-evident audit log** (each entry is chained to the one before, so local edits are detectable), and **signed filter-list manifests**. There is no screen for these yet, so nothing in the app depends on them. They are the groundwork for the policy-file edition that needs no server, account or analytics, and they are not a substitute for a remote logging system.
 
 ## How it works
 
@@ -368,7 +377,7 @@ The source is published here so you can read and review how VayuSetu works. It i
 | `ios/` | The iPhone app and its shared logic, packet tunnel, Safari extensions, tests and the Xcode project |
 | `macos/` | The Mac app's screens, the network filter extension (`Filter/`), rule-engine and provider tests (`Tests/`, run with `tools/test-filter.sh`), the geolocation tooling, and the build, signing and notarization scripts. The country-lookup tables (`macos/Resources/Geo/*.bin`, from DB-IP) are not stored in git; `macos/scripts/build-geo.py` regenerates them from the public data it names |
 | `Extensions/` | The Dynamic Island, widget and Control Center extensions |
-| `Packages/VayuSetuCore/` | Core logic shared by both apps |
+| `Packages/VayuSetuCore/` | Core logic shared by both apps: filter lists and rules, the Safari planner, behavior insights, and the signed-policy and audit building blocks. Run its tests with `swift test` |
 | `Docs/` | Architecture, security and design notes, including [DNS rule precedence](Docs/Architecture/DNS-Rule-Precedence.md) |
 
 ## Support

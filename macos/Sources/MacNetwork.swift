@@ -1,5 +1,6 @@
 import AppKit
 import Charts
+import CryptoKit
 import NetworkExtension
 import SwiftUI
 
@@ -13,6 +14,7 @@ import SwiftUI
     @Published private(set) var pending: [PendingQuestion] = []
     @Published private(set) var lists: [NetList] = []
     @Published private(set) var usage = FilterUsage()
+    @Published private(set) var audit: [FilterAuditRecord] = []
     @Published private(set) var profiles: [FilterProfile] = []
     @Published private(set) var activeProfile: String?
     @Published private(set) var refreshing = Set<UUID>()
@@ -22,9 +24,21 @@ import SwiftUI
     private var task: Task<Void, Never>?
     private var lastID: Int64 = 0
     private var wanted = false
+    /// NSXPC callbacks are not guaranteed to arrive if a system extension is
+    /// restarting. A bounded call prevents the Network page from hanging forever
+    /// and lets the next poll recreate the connection.
+    private let xpcTimeout: TimeInterval = 5
     static let maximumShown = 1500
 
     var supported: Bool { ExtensionManager.filterBundled }
+    var auditChainValid: Bool {
+        var previous: String?
+        for event in audit {
+            guard event.previousHash == previous, event.verifies() else { return false }
+            previous = event.hash
+        }
+        return true
+    }
 
     // MARK: Switching on and off
     func refreshState() async {
@@ -79,6 +93,9 @@ import SwiftUI
             let once = Once()
             guard let proxy = proxy({ _ in if once.first() { continuation.resume(returning: nil) } }) else { continuation.resume(returning: nil); return }
             call(proxy) { data in if once.first() { continuation.resume(returning: data) } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + xpcTimeout) { [weak self] in
+                if once.first() { self?.disconnect(); continuation.resume(returning: nil) }
+            }
         }
     }
     private func tell(_ call: @escaping (VayuFilterXPC, @escaping (Bool) -> Void) -> Void) async -> Bool {
@@ -86,6 +103,9 @@ import SwiftUI
             let once = Once()
             guard let proxy = proxy({ _ in if once.first() { continuation.resume(returning: false) } }) else { continuation.resume(returning: false); return }
             call(proxy) { ok in if once.first() { continuation.resume(returning: ok) } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + xpcTimeout) { [weak self] in
+                if once.first() { self?.disconnect(); continuation.resume(returning: false) }
+            }
         }
     }
 
@@ -109,6 +129,7 @@ import SwiftUI
         }
         ticks += 1
         if ticks % 5 == 0, let d = await ask({ $0.usage(reply: $1) }), let u = try? JSONDecoder().decode(FilterUsage.self, from: d) { usage = u }
+        if first, let d = await ask({ $0.audit(reply: $1) }), let a = try? JSONDecoder().decode([FilterAuditRecord].self, from: d) { audit = a }
         if ticks % 600 == 1 { await refreshDueLists() }
         if let d = await ask({ $0.pending(reply: $1) }), let q = try? JSONDecoder().decode([PendingQuestion].self, from: d) {
             if !q.isEmpty && q.map(\.id) != pending.map(\.id) { NSApplication.shared.dockTile.badgeLabel = "\(q.count)" }
@@ -165,6 +186,11 @@ import SwiftUI
     }
     /// A list typed or pasted in (`text`), or one that is fetched from `source` now and then.
     func addList(name: String, kind: NetAction, source: String?, text: String) {
+        if let source {
+            guard let url = URL(string: source), url.scheme?.lowercased() == "https", url.user == nil, url.password == nil, url.host != nil else {
+                message = "List sources must be valid HTTPS addresses without login credentials."; return
+            }
+        }
         var list = NetList(name: name, kind: kind, source: source)
         if !text.isEmpty { list.entries = NetListParser.parse(text); list.updated = Date(); list.status = "\(list.entries.count) entries" }
         guard lists.count < 50 else { message = "That is the most lists the filter keeps (50)."; return }
@@ -187,12 +213,17 @@ import SwiftUI
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { setStatus(id, "The server answered \((response as? HTTPURLResponse)?.statusCode ?? 0)."); return }
             guard data.count < 40_000_000 else { setStatus(id, "The list is larger than 40 MB."); return }
+            let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            if let expected = list.expectedSHA256?.lowercased(), expected != checksum { setStatus(id, "Checksum mismatch; kept the previous list."); return }
             let entries = await Task.detached { NetListParser.parse(String(decoding: data, as: UTF8.self)) }.value
             guard !entries.isEmpty else { setStatus(id, "The list had no usable entries; kept the old one."); return }
-            pushLists(lists.map { var l = $0; if l.id == id { l.entries = entries; l.updated = Date(); l.status = "\(entries.count) entries" }; return l })
+            pushLists(lists.map { var l = $0; if l.id == id { l.entries = entries; l.updated = Date(); l.checksum = checksum; l.status = "\(entries.count) entries" }; return l })
         } catch { setStatus(id, "Could not fetch: \(error.localizedDescription)") }
     }
-    private func setStatus(_ id: UUID, _ text: String) { lists = lists.map { var l = $0; if l.id == id { l.status = text }; return l } }
+    private func setStatus(_ id: UUID, _ text: String) {
+        let updated = lists.map { var l = $0; if l.id == id { l.status = text }; return l }
+        pushLists(updated)
+    }
     func hits(for rule: NetRule) -> HitCount? { usage.rules[rule.id.uuidString] }
     func hits(for list: NetList) -> HitCount? { usage.lists[list.name] }
 
@@ -260,6 +291,8 @@ struct MacNetwork: View {
     @State private var importing = false
     @State private var exporting = false
     @State private var exportDocument = NetRulesDocument(rules: [])
+    @State private var exportingAudit = false
+    @State private var auditDocument = FilterAuditDocument(events: [])
     private enum Expiry: String, CaseIterable, Identifiable {
         case never = "Never", hour = "1 hour", workday = "8 hours", day = "1 day", week = "1 week"; var id: String { rawValue }
         var seconds: TimeInterval? { switch self { case .never: nil; case .hour: 3600; case .workday: 8 * 3600; case .day: 86_400; case .week: 604_800 } }
@@ -281,6 +314,10 @@ struct MacNetwork: View {
         }
         return table.map { ($0.key, $0.value.name, $0.value.total, $0.value.blocked, $0.value.hosts, $0.value.last) }.sorted { $0.total > $1.total }
     }
+    /// Keep the editor responsive when an imported ruleset or long-running
+    /// session contains thousands of entries. The extension still enforces the
+    /// complete set; the UI renders a bounded recent slice and offers export.
+    private var rulesForDisplay: [NetRule] { Array(client.rules.reversed().prefix(25)) }
 
     var body: some View {
         MacPage(title: "Network", subtitle: "See which apps connect where, and block what you don't want.") {
@@ -290,6 +327,7 @@ struct MacNetwork: View {
         }
         .onAppear { client.startPolling() }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .json, defaultFilename: "VayuSetu-network-rules") { _ in }
+        .fileExporter(isPresented: $exportingAudit, document: auditDocument, contentType: .json, defaultFilename: "VayuSetu-network-audit") { _ in }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             do {
                 let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -445,15 +483,15 @@ struct MacNetwork: View {
                     Picker("Mode", selection: Binding(get: { client.settings.mode }, set: { client.setMode($0) })) { ForEach(FilterMode.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 330)
                     Text(client.settings.mode.detail).font(.system(size: 11)).foregroundStyle(.secondary)
                     Divider()
-                    if client.settings.mode == .passive {
-                        MacRow(icon: "moon", title: "New connections are", detail: "Applied without asking. Rules and lists still win.") {
+                    if client.settings.mode == .allowAll {
+                        MacRow(icon: "checkmark.circle", title: "Unmatched connections are", detail: "Allowed without asking. Rules and lists still win.") {
                             Picker("", selection: Binding(get: { client.settings.passiveAction }, set: { var s = client.settings; s.passiveAction = $0; client.update(settings: s) })) { Text("Allowed").tag(NetAction.allow); Text("Blocked").tag(NetAction.block) }.labelsHidden().pickerStyle(.segmented).frame(width: 160)
                         }
                         Toggle("Save the choice as a rule for that app", isOn: Binding(get: { client.settings.passiveCreatesRules }, set: { var s = client.settings; s.passiveCreatesRules = $0; client.update(settings: s) })).font(.system(size: 12))
                         Divider()
                     }
-                    if client.settings.mode == .normal {
-                        MacRow(icon: "arrow.triangle.branch", title: "Default for connections no rule covers", detail: client.settings.defaultAction == .allow ? "Allowed. Rules block what you choose." : "Blocked. Rules allow what you choose.") {
+                    if client.settings.mode == .requireApproval {
+                        MacRow(icon: "arrow.triangle.branch", title: "Default for connections no rule covers", detail: client.settings.defaultAction == .allow ? "Allowed after the approval timeout." : "Blocked after the approval timeout.") {
                             Picker("", selection: Binding(get: { client.settings.defaultAction }, set: { value in
                                 if value == .block { confirmingBlockAll = true } else { var s = client.settings; s.defaultAction = .allow; client.update(settings: s) }
                             })) { Text("Allow").tag(NetAction.allow); Text("Block").tag(NetAction.block) }.labelsHidden().pickerStyle(.segmented).frame(width: 150)
@@ -497,7 +535,7 @@ struct MacNetwork: View {
                     Button { exportDocument = NetRulesDocument(rules: client.rules); exporting = true } label: { Label("Export…", systemImage: "square.and.arrow.up") }.buttonStyle(MacHoverButtonStyle()).disabled(client.rules.isEmpty)
                 }
             }) {
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(groupNames, id: \.self) { name in
                         let count = client.rules.filter { $0.groupName == name }.count
                         MacRow(icon: "folder", title: name, detail: "\(count) rule\(count == 1 ? "" : "s")") {
@@ -508,12 +546,22 @@ struct MacNetwork: View {
                 }
                 Text("Switch a group off to stop all of its rules at once, for example Work or Public Wi-Fi, and back on when you need them.").font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            MacPanel("Audit trail", icon: "checkmark.shield") {
+                HStack(spacing: 10) {
+                    Text("Decision and policy changes are kept locally as a hash-chained record.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Export audit…") { auditDocument = FilterAuditDocument(events: client.audit); exportingAudit = true }.buttonStyle(MacHoverButtonStyle()).disabled(client.audit.isEmpty)
+                }
+                if !client.auditChainValid {
+                    Label("Audit history integrity could not be verified.", systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(.orange)
+                }
+            }
             MacPanel("Add a rule", icon: "plus.circle") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
                         Picker("App", selection: $newRule.app) {
                             Text("Every app").tag("*")
-                            ForEach(apps, id: \.app) { Text($0.name).tag($0.app) }
+                            ForEach(apps.prefix(100), id: \.app) { Text($0.name).tag($0.app) }
                         }.frame(width: 240)
                         TextField("Destination (example.com, *.example.com, 10.0.0.0/8, or *)", text: $newRule.host).textFieldStyle(.roundedBorder)
                         TextField("Port", text: $newRule.port).textFieldStyle(.roundedBorder).frame(width: 70)
@@ -528,6 +576,11 @@ struct MacNetwork: View {
                         }
                         Picker("Expires", selection: $expiry) { ForEach(Expiry.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 190)
                         Toggle("Only at certain times", isOn: $scheduleOn).toggleStyle(.switch).controlSize(.small)
+                    }
+                    HStack(spacing: 10) {
+                        TextField("Signer Team ID (optional)", text: Binding(get: { newRule.team ?? "" }, set: { newRule.team = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) })).textFieldStyle(.roundedBorder).frame(width: 220)
+                        TextField("Parent process (optional)", text: Binding(get: { newRule.parent ?? "" }, set: { newRule.parent = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) })).textFieldStyle(.roundedBorder).frame(width: 220)
+                        Text("Constrain the rule to a signer or process lineage.").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     if scheduleOn {
                         HStack(spacing: 10) {
@@ -550,8 +603,8 @@ struct MacNetwork: View {
                 }
             }) {
                 if client.rules.isEmpty { Text("No rules yet. Right-click a connection to block it, or add a rule above.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80) }
-                VStack(spacing: 0) {
-                    ForEach(client.rules.reversed()) { rule in
+                LazyVStack(spacing: 0) {
+                    ForEach(rulesForDisplay) { rule in
                         MacRow(icon: rule.action == .block ? "hand.raised.fill" : "checkmark.circle", title: "\(rule.app == "*" ? "Every app" : rule.app) → \(rule.host)\(rule.port == "*" ? "" : ":" + rule.port)", detail: ruleDetail(rule), tint: rule.action == .block ? .red : .green) {
                             HStack(spacing: 8) {
                                 Picker("", selection: Binding(get: { rule.action }, set: { client.setAction(rule.id, $0) })) { Text("Block").tag(NetAction.block); Text("Allow").tag(NetAction.allow) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
@@ -559,6 +612,9 @@ struct MacNetwork: View {
                             }
                         }
                         if rule.id != client.rules.first?.id { Divider() }
+                    }
+                    if client.rules.count > rulesForDisplay.count {
+                        Text("Showing the 25 most recent rules. Export the complete \(client.rules.count)-rule set for review or backup.").font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 8)
                     }
                 }
             }
@@ -806,5 +862,16 @@ struct NetRulesDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return FileWrapper(regularFileWithContents: try encoder.encode(rules))
+    }
+}
+
+struct FilterAuditDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var events: [FilterAuditRecord]
+    init(events: [FilterAuditRecord]) { self.events = events }
+    init(configuration: ReadConfiguration) throws { events = (try? JSONDecoder().decode([FilterAuditRecord].self, from: configuration.file.regularFileContents ?? Data())) ?? [] }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
+        return FileWrapper(regularFileWithContents: try encoder.encode(events))
     }
 }

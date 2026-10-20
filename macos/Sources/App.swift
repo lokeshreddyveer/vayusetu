@@ -3,10 +3,10 @@ import SwiftUI
 import VayuSetuCore
 
 enum Page: String, CaseIterable, Identifiable {
-    case home = "Home", profiles = "VPN Profiles", dns = "Encrypted DNS", adblock = "Adblock", network = "Network", checks = "Diagnostics", logs = "Logs", settings = "Settings"
-    static let primary: [Page] = [.home, .profiles, .dns, .adblock, .network, .settings]
+    case home = "Home", profiles = "VPN Profiles", dns = "Encrypted DNS", adblock = "Adblock", network = "Network", security = "Security Center", checks = "Diagnostics", logs = "Logs", settings = "Settings"
+    static let primary: [Page] = [.home, .profiles, .dns, .adblock, .network, .security, .settings]
     var id: String { rawValue }
-    var icon: String { switch self { case .home: "power"; case .profiles: "key.horizontal"; case .dns: "network"; case .adblock: "hand.raised"; case .network: "network.badge.shield.half.filled"; case .checks: "waveform.path.ecg"; case .logs: "text.alignleft"; case .settings: "gearshape" } }
+    var icon: String { switch self { case .home: "power"; case .profiles: "key.horizontal"; case .dns: "network"; case .adblock: "hand.raised"; case .network: "network.badge.shield.half.filled"; case .security: "sparkles"; case .checks: "waveform.path.ecg"; case .logs: "text.alignleft"; case .settings: "gearshape" } }
 }
 @main struct VayuSetuMac: App {
     init() { CrashTrace.install() }
@@ -37,9 +37,26 @@ enum Page: String, CaseIterable, Identifiable {
         else { await withCheckedContinuation { continuation in extensions.activate { Task { await store.togglePill(pill); continuation.resume() } } } }
     }
     var body: some Scene {
-        WindowGroup("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions, filterClient: filterClient).onOpenURL { url in if !filterClient.handle(url: url) { Task { await handleProtectionLink(url) } } }.frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
-        MenuBarExtra("VayuSetu", systemImage: "wind") { MenuControls(store: store, extensions: extensions, filter: filterClient) }
+        Window("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions, filterClient: filterClient).onOpenURL { url in if !filterClient.handle(url: url) { Task { await handleProtectionLink(url) } } }.frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
+        MenuBarExtra { MenuControls(store: store, extensions: extensions, filter: filterClient) } label: {
+            Label { Text(menuBarTitle) } icon: { MenuBarMark(active: store.networkActive) }
+        }
         .commands { CommandGroup(replacing: .appInfo) { Button("About VayuSetu") { NSApplication.shared.orderFrontStandardAboutPanel(options: [.applicationName: "VayuSetu", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown", .credits: NSAttributedString(string: "By R3dby · Native VPN and encrypted DNS control center")]) } } }
+    }
+    private var menuBarTitle: String { store.networkActive ? "VayuSetu On" : "VayuSetu" }
+}
+
+/// A compact monochrome version of the VayuSetu mark for the menu bar. The
+/// template rendering keeps it legible against both macOS menu-bar appearances.
+private struct MenuBarMark: View {
+    let active: Bool
+    private static let artwork = Bundle.main.url(forResource: "BrandArtwork", withExtension: "png").flatMap(NSImage.init(contentsOf:))
+    var body: some View {
+        if let artwork = Self.artwork {
+            Image(nsImage: artwork).resizable().renderingMode(.template).foregroundStyle(active ? .green : .primary).scaledToFit().frame(width: 16, height: 16)
+        } else {
+            Image(systemName: active ? "checkmark.shield.fill" : "shield").foregroundStyle(active ? .green : .primary)
+        }
     }
 }
 struct DesktopView: View {
@@ -119,6 +136,9 @@ struct DesktopView: View {
         .onChange(of: filterClient.pending) { _, _ in
             ConnectionAlertController.shared.sync(client: filterClient)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .init("VayuSetu.openNetwork"))) { _ in
+            selection = .network
+        }
     }
     private var compactSidebar: some View {
         VStack(spacing: 12) {
@@ -146,6 +166,7 @@ struct DesktopView: View {
         case .dns: AnyView(MacDNS(store: store, tunnel: tunnel, activate: { extensions.activate(onReady: $0) }))
         case .adblock: AnyView(MacAdblock(filtering: store.filtering, store: store))
         case .network: AnyView(MacNetwork(client: filterClient, extensions: extensions))
+        case .security: AnyView(MacSecurityInsights(filter: filterClient))
         case .checks: AnyView(VSChecksScreen(store: store, tunnel: tunnel, network: network))
         case .logs: AnyView(VSLogsScreen(tunnel: tunnel))
         case .settings: AnyView(MacSettings(store: store, tunnel: tunnel, preferences: preferences))

@@ -99,6 +99,7 @@ final class FilterStore {
     private var lists: [NetList] = []
     private var index = NetListIndex()
     private var usage = FilterUsage()
+    private var audit: [FilterAuditRecord] = []
     /// Connections whose bytes are being counted: the flow, and the history entry to add them to.
     private var tracked: [UUID: Int64] = [:]
     private var finished: [UUID: Int] = [:]
@@ -107,12 +108,14 @@ final class FilterStore {
     private var fileURL: URL {
         if let storageURL { return storageURL }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("VayuSetuFilter", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: base.path)
         return base.appendingPathComponent("filter.json")
     }
     private var historyURL: URL { fileURL.deletingLastPathComponent().appendingPathComponent("history.json") }
     private var listsURL: URL { fileURL.deletingLastPathComponent().appendingPathComponent("lists.json") }
     private var usageURL: URL { fileURL.deletingLastPathComponent().appendingPathComponent("usage.json") }
+    private var auditURL: URL { fileURL.deletingLastPathComponent().appendingPathComponent("audit.json") }
     private struct Saved: Codable { var rules: [NetRule]; var settings: FilterSettings; var teams: [String: String]? = nil }
     func load() {
         lock.lock(); defer { lock.unlock() }
@@ -122,6 +125,7 @@ final class FilterStore {
         }
         if let data = try? Data(contentsOf: listsURL), let saved = try? JSONDecoder().decode([NetList].self, from: data) { lists = saved; index = NetListIndex(saved) }
         if let data = try? Data(contentsOf: usageURL), let saved = try? JSONDecoder().decode(FilterUsage.self, from: data) { usage = saved }
+        if let data = try? Data(contentsOf: auditURL), let saved = try? JSONDecoder().decode([FilterAuditRecord].self, from: data) { audit = Array(saved.suffix(5000)) }
         if historyTimer == nil {
             let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
             timer.schedule(deadline: .now() + 30, repeating: 30)
@@ -129,12 +133,17 @@ final class FilterStore {
             timer.resume(); historyTimer = timer
         }
     }
-    private func saveLocked() { if let data = try? JSONEncoder().encode(Saved(rules: rules, settings: settings, teams: teams)) { try? data.write(to: fileURL, options: .atomic) } }
+    private func saveLocked() { if let data = try? JSONEncoder().encode(Saved(rules: rules, settings: settings, teams: teams)) { try? data.write(to: fileURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path) } }
+    private func auditLocked(_ actor: String, _ action: String, _ detail: String) {
+        let event = FilterAuditRecord(actor: actor, action: action, detail: detail, previousHash: audit.last?.hash)
+        audit.append(event); if audit.count > 5000 { audit.removeFirst(audit.count - 5000) }
+        if let data = try? JSONEncoder().encode(audit) { try? data.write(to: auditURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auditURL.path) }
+    }
     /// History is written every half minute while there is something new, so it survives a restart without writing on every connection.
     func saveHistory() {
         lock.lock(); guard dirty else { lock.unlock(); return }; dirty = false; let snapshot = flows; let counts = usage; lock.unlock()
-        if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: historyURL, options: .atomic) }
-        if let data = try? JSONEncoder().encode(counts) { try? data.write(to: usageURL, options: .atomic) }
+        if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: historyURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: historyURL.path) }
+        if let data = try? JSONEncoder().encode(counts) { try? data.write(to: usageURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: usageURL.path) }
     }
     /// Notes an app whose signature is invalid, or whose signer is not the one seen before. Call with the lock held.
     private func identityNote(_ info: FlowInfo) -> String? {
@@ -152,7 +161,7 @@ final class FilterStore {
     func decide(_ flow: NEFilterFlow, _ info: FlowInfo) -> NEFilterNewFlowVerdict {
         lock.lock(); defer { lock.unlock() }
         if NetRuleEngine.isExempt(app: info.app, host: info.host, team: info.team, valid: info.valid) { record(info, .allow, nil); return .allow() }
-        let decision = NetRuleEngine.decide(app: info.app, host: info.host, port: info.port, address: info.remoteAddress, outbound: info.outbound, rules: rules, settings: settings)
+        let decision = NetRuleEngine.decide(app: info.app, host: info.host, port: info.port, address: info.remoteAddress, outbound: info.outbound, team: info.team, parent: info.parent, rules: rules, settings: settings)
         if let name = index.match(.block, host: info.host, address: info.remoteAddress) {
             let overridden = decision.rule.map { $0.action == .allow && $0.app != "*" } ?? false
             if !overridden { return finish(flow, info, .block, rule: nil, list: name) }
@@ -261,12 +270,15 @@ final class FilterStore {
             : waiting.filter { $0.value.question.app == seed.app }.map(\.key)
         let items = ids.compactMap { waiting.removeValue(forKey: $0) }
         let action: NetAction = timedOut ? self.settings.defaultAction : ((answer ?? true) ? .allow : .block)
+        auditLocked("user", timedOut ? "connection.timeout" : "connection.decided", "app=\(seed.app),action=\(action.rawValue),count=\(items.count)")
         if !timedOut { sessionDecisions[seed.app] = action }
         if !timedOut, var chosen, rules.count < 5000 {
             chosen.app = seed.app; chosen.action = action
             rules.append(chosen); saveLocked()
         } else if remember && !timedOut {
-            rules.append(NetRule(app: seed.app, host: "*", port: "*", action: action, note: "From a question"))
+            var rule = NetRule(app: seed.app, host: "*", port: "*", action: action, note: "From a question")
+            rule.team = seed.team; rule.parent = seed.parent
+            rules.append(rule)
             saveLocked()
         }
         var verdicts: [(NEFilterFlow, NEFilterNewFlowVerdict)] = []
@@ -291,10 +303,10 @@ final class FilterStore {
     func recent(after id: Int64) -> [FlowRecord] { lock.lock(); defer { lock.unlock() }; return flows.filter { $0.id > id } }
     func clearFlows() { lock.lock(); flows.removeAll(); dirty = true; lock.unlock(); saveHistory() }
     func currentRules() -> [NetRule] { lock.lock(); defer { lock.unlock() }; return rules }
-    func setRules(_ new: [NetRule]) { lock.lock(); rules = Array(new.prefix(5000)); sessionDecisions.removeAll(); saveLocked(); lock.unlock() }
+    func setRules(_ new: [NetRule]) { lock.lock(); rules = Array(new.prefix(5000)); sessionDecisions.removeAll(); auditLocked("app", "rules.updated", "count=\(rules.count)"); saveLocked(); lock.unlock() }
     func currentSettings() -> FilterSettings { lock.lock(); defer { lock.unlock() }; return settings }
     func setSettings(_ new: FilterSettings) {
-        lock.lock(); settings = new; sessionDecisions.removeAll(); saveLocked()
+        lock.lock(); settings = new; sessionDecisions.removeAll(); auditLocked("app", "settings.updated", "mode=\(new.mode.rawValue)"); saveLocked()
         let leaving = new.askMode ? [] : Array(waiting.keys)
         lock.unlock()
         for id in leaving { resolve(id, settings: nil, remember: false, timedOut: true) }     // asking was switched off: let waiting connections through by the default
@@ -302,11 +314,12 @@ final class FilterStore {
     func currentLists() -> [NetList] { lock.lock(); defer { lock.unlock() }; return lists }
     func setLists(_ new: [NetList]) {
         let built = NetListIndex(new)       // built before taking the lock: a large list takes a moment
-        lock.lock(); lists = new; index = built; sessionDecisions.removeAll()
-        if let data = try? JSONEncoder().encode(new) { try? data.write(to: listsURL, options: .atomic) }
+        lock.lock(); lists = new; index = built; sessionDecisions.removeAll(); auditLocked("app", "lists.updated", "count=\(new.count)")
+        if let data = try? JSONEncoder().encode(new) { try? data.write(to: listsURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: listsURL.path) }
         lock.unlock()
     }
     func currentUsage() -> FilterUsage { lock.lock(); defer { lock.unlock() }; return usage }
+    func currentAudit() -> [FilterAuditRecord] { lock.lock(); defer { lock.unlock() }; return audit }
     func pendingQuestions() -> [PendingQuestion] {
         lock.lock(); defer { lock.unlock() }
         let questions = waiting.values.map(\.question).sorted { $0.id < $1.id }
@@ -352,7 +365,7 @@ final class FilterService: NSObject, NSXPCListenerDelegate, VayuFilterXPC {
     func recentFlows(after id: Int64, reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.recent(after: id))) ?? Data("[]".utf8)) }
     func rules(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentRules())) ?? Data("[]".utf8)) }
     func setRules(_ data: Data, reply: @escaping (Bool) -> Void) {
-        guard data.count < 4_000_000, let rules = try? decoder.decode([NetRule].self, from: data) else { reply(false); return }
+        guard data.count < 4_000_000, let rules = try? decoder.decode([NetRule].self, from: data), rules.count <= 5_000, rules.allSatisfy(NetRuleEngine.isValidRule) else { reply(false); return }
         store.setRules(rules); reply(true)
     }
     func settings(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentSettings())) ?? Data()) }
@@ -368,10 +381,12 @@ final class FilterService: NSObject, NSXPCListenerDelegate, VayuFilterXPC {
     func clearFlows(reply: @escaping (Bool) -> Void) { store.clearFlows(); reply(true) }
     func lists(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentLists())) ?? Data("[]".utf8)) }
     func setLists(_ data: Data, reply: @escaping (Bool) -> Void) {
-        guard data.count < 60_000_000, let lists = try? decoder.decode([NetList].self, from: data) else { reply(false); return }
+        guard data.count < 60_000_000, let lists = try? decoder.decode([NetList].self, from: data), lists.count <= 50,
+              lists.allSatisfy({ $0.entries.count <= NetList.maximumEntries && ($0.source == nil || (URL(string: $0.source!)?.scheme?.lowercased() == "https" && URL(string: $0.source!)?.user == nil && URL(string: $0.source!)?.password == nil)) }) else { reply(false); return }
         store.setLists(Array(lists.prefix(50))); reply(true)
     }
     func usage(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentUsage())) ?? Data("{}".utf8)) }
+    func audit(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentAudit())) ?? Data("[]".utf8)) }
 }
 
 /// Who an app is, from its code signature: the identifier, the team that signed it, and whether the signature is valid.

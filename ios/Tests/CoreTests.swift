@@ -24,6 +24,8 @@ import Foundation
         PersistentKeepalive = 25
         """
         let result = try ProfileParser.parse(valid)
+        let metadataExport = valid.replacingOccurrences(of: "[Interface]", with: "[Interface]\nTable = auto\nFwMark = 0\nSaveConfig = false")
+        expect(try ProfileParser.parse(metadataExport).peerCount == 1, "official WireGuard metadata")
         expect(result.peerCount == 1 && result.fullTunnel && result.addresses.count == 2, "valid dual-stack profile")
         rejects(valid.replacingOccurrences(of: "PrivateKey = \(key)", with: "PrivateKey = bad"), "invalid private key")
         rejects(valid.replacingOccurrences(of: "10.0.0.2/32", with: "10.0.0.2/33"), "CIDR overflow")

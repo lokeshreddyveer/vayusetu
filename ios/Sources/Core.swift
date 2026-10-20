@@ -36,8 +36,16 @@ enum ProfileParser {
             guard parts.count == 2, !section.isEmpty else { throw AppIssue(message: "Invalid WireGuard syntax at line \(index + 1).") }
             let key = parts[0].trimmingCharacters(in: .whitespaces)
             let value = parts[1].trimmingCharacters(in: .whitespaces)
-            let permitted = section == "interface" ? ["PrivateKey", "Address", "DNS", "MTU", "ListenPort"] : ["PublicKey", "PresharedKey", "AllowedIPs", "Endpoint", "PersistentKeepalive"]
+            // These are ordinary WireGuard configuration settings. VayuSetu does not
+            // execute hooks or silently apply routing directives, but it must still be
+            // able to import files exported by the official clients and providers.
+            let permitted = section == "interface" ? ["PrivateKey", "Address", "DNS", "MTU", "ListenPort", "FwMark", "Table", "SaveConfig"] : ["PublicKey", "PresharedKey", "AllowedIPs", "Endpoint", "PersistentKeepalive"]
             guard permitted.contains(key), !value.isEmpty else { throw AppIssue(message: "Unsupported or empty setting at line \(index + 1). Shell hooks are not supported.") }
+            if section == "interface" {
+                if key == "FwMark", UInt32(value) == nil { throw AppIssue(message: "FwMark must be a valid unsigned integer at line \(index + 1).") }
+                if key == "Table", !["auto", "off"].contains(value.lowercased()) && UInt32(value) == nil { throw AppIssue(message: "Table must be auto, off, or a numeric table at line \(index + 1).") }
+                if key == "SaveConfig", !["true", "false"].contains(value.lowercased()) { throw AppIssue(message: "SaveConfig must be true or false at line \(index + 1).") }
+            }
             if section == "interface" {
                 guard interface[key] == nil else { throw AppIssue(message: "Duplicate interface setting at line \(index + 1).") }
                 interface[key] = value
@@ -46,7 +54,9 @@ enum ProfileParser {
                 peers[peers.count - 1][key] = value
             }
         }
-        guard validKey(interface["PrivateKey"]), !peers.isEmpty else { throw AppIssue(message: "A valid private key and at least one peer are required.") }
+        if section.isEmpty { throw AppIssue(message: "This profile has no WireGuard configuration in it. Its saved keys are missing or empty: edit the profile and import the original file again.") }
+        guard validKey(interface["PrivateKey"]) else { throw AppIssue(message: interface["PrivateKey"] == nil ? "The profile has no PrivateKey line. Edit it and import the original file again." : "The profile's PrivateKey is not a valid WireGuard key (it must be 44 characters of base64).") }
+        guard !peers.isEmpty else { throw AppIssue(message: "The profile has no [Peer] section. Edit it and import the original file again.") }
         let addresses = list(interface["Address"])
         guard !addresses.isEmpty, addresses.allSatisfy(validCIDR) else { throw AppIssue(message: "Address must contain IPv4 or IPv6 CIDR addresses.") }
         let dns = list(interface["DNS"])

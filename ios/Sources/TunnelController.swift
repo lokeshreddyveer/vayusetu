@@ -252,7 +252,9 @@ import AppKit
                 let code = (error as NSError).code
                 let domain = TunnelStartupEvent.sanitizedDomain((error as NSError).domain)
                 Task { @MainActor in
-                    self?.message = "The tunnel stopped (system error \(code)). Check the server profile, resolver, and extension signing, then reconnect."
+                    self?.message = code == 1
+                        ? "The system stopped the tunnel before WireGuard completed. Disconnect other VPNs or filters, then verify the server profile and credentials."
+                        : "The tunnel stopped (system error \(code)). Check the server profile, resolver, and extension signing, then reconnect."
                     self?.record("System VPN disconnect · " + domain + ":" + String(code), severity: .error)
                 }
             }
@@ -364,10 +366,30 @@ import AppKit
                     }
                 }
             }
+            #if os(macOS)
+            // Only one packet tunnel can reliably own the default route. A
+            // competing provider otherwise makes this tunnel stop with a
+            // generic system error (for example while Surfshark is active).
+            let activeForeign = try await NETunnelProviderManager.loadAllFromPreferences().first { item in
+                guard let proto = item.protocolConfiguration as? NETunnelProviderProtocol,
+                      proto.providerBundleIdentifier != self.providerID else { return false }
+                return [.connected, .connecting, .reasserting, .disconnecting].contains(item.connection.status)
+            }
+            if activeForeign != nil {
+                throw AppIssue(message: "Another VPN tunnel is active. Disconnect it before starting VayuSetu.")
+            }
+            #endif
             guard mode.supported else { throw AppIssue(message: RoutingMode.directDNSUnavailable) }
             guard let text = String(data: configuration, encoding: .utf8) else { throw AppIssue(message: "Invalid profile encoding.") }
             try ProfileParser.validateTunnel(ProfileParser.parse(text)); if applyResolver { _ = try DNSService.endpoint(resolver) }
-            let secret = try JSONEncoder().encode(TunnelSecret(wireguard: text, resolver: resolver, mode: mode, requireNativeIPv6: requireNativeIPv6, resolverBootstrapAddresses: bootstrapAddresses.isEmpty ? nil : try ResolverBootstrap.validated(bootstrapAddresses), requireStrictRouting: strictRouting, filtering: filtering ? true : nil, dnsUpstreamDirect: dnsUpstreamDirect ? true : nil, applyResolver: applyResolver ? nil : false, fallbackResolver: fallbackDNS?.endpoint, fallbackBootstrapAddresses: (fallbackDNS?.bootstrap.isEmpty ?? true) ? nil : fallbackDNS?.bootstrap))
+            #if os(macOS)
+            // The tunnel looks up the server's name just as it starts, while the system's DNS may still point at a tunnel that is being
+            // replaced; that lookup then stalls and the start never finishes. Looking the name up here, now, avoids it.
+            let pinned = await Self.pinningEndpoints(in: text)
+            #else
+            let pinned = text
+            #endif
+            let secret = try JSONEncoder().encode(TunnelSecret(wireguard: pinned, resolver: resolver, mode: mode, requireNativeIPv6: requireNativeIPv6, resolverBootstrapAddresses: bootstrapAddresses.isEmpty ? nil : try ResolverBootstrap.validated(bootstrapAddresses), requireStrictRouting: strictRouting, filtering: filtering ? true : nil, dnsUpstreamDirect: dnsUpstreamDirect ? true : nil, applyResolver: applyResolver ? nil : false, fallbackResolver: fallbackDNS?.endpoint, fallbackBootstrapAddresses: (fallbackDNS?.bootstrap.isEmpty ?? true) ? nil : fallbackDNS?.bootstrap))
             stage = .preparing
             if mgr.isOnDemandEnabled {
                 mgr.isOnDemandEnabled = false
@@ -440,6 +462,26 @@ import AppKit
         }
     }
     var localDNSRunning: Bool { running && protocolName == "Local DNS" }
+
+    /// Replaces each `Endpoint = name:port` with the address the name resolves to now (IPv4 first). A name that does not resolve in a few
+    /// seconds is left as it is, so the tunnel can still try on its own. The saved profile is not changed.
+    nonisolated static func pinningEndpoints(in text: String) async -> String {
+        await Task.detached(priority: .userInitiated) { () -> String in
+            var out: [String] = []
+            for line in text.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.lowercased().hasPrefix("endpoint"), let equals = trimmed.firstIndex(of: "=") else { out.append(line); continue }
+                let value = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+                guard let colon = value.lastIndex(of: ":"), !value.hasPrefix("[") else { out.append(line); continue }
+                let host = String(value[..<colon]), port = String(value[value.index(after: colon)...])
+                guard ProfileParser.ipFamily(host) == nil, !host.isEmpty, UInt16(port) != nil,
+                      let found = try? ResolverBootstrap.resolve(host: host, timeout: 4),
+                      let address = found.first(where: { ProfileParser.ipFamily($0) == 4 }) ?? found.first else { out.append(line); continue }
+                out.append("Endpoint = " + (address.contains(":") ? "[" + address + "]" : address) + ":" + port)
+            }
+            return out.joined(separator: "\n")
+        }.value
+    }
 
     // MARK: Recent lookups (local DNS tunnel only; kept in the tunnel's memory, never saved)
     @Published private(set) var lookups: [DNSQueryEntry] = []
@@ -857,6 +899,9 @@ import AppKit
             do { try await Task.sleep(for: .seconds(timeout)) } catch { return }
             guard let self, self.lifecycleID == id, self.status != .connected, self.wantedConnection else { return }
             self.record("Connection deadline exceeded", severity: .warning)
+            self.message = self.status == .connecting || self.status == .reasserting
+                ? "The system extension did not finish starting the tunnel. Disconnect other VPNs or filters and verify the server profile and credentials."
+                : "The system stopped the tunnel before it became usable. Disconnect other VPNs or filters and verify the server profile and credentials."
             self.manager?.connection.stopVPNTunnel(); self.refreshStatus(); self.scheduleRetry()
             if !self.autoReconnect { self.wantedConnection = false; self.stage = .failed; self.message = "Connection deadline exceeded." }
         }
@@ -864,7 +909,10 @@ import AppKit
     private func scheduleRetry() {
         guard !busy, wantedConnection, autoReconnect, pathAvailable, retryTask == nil else { return }
         guard let delay = retryPolicy.delay(after: retryAttempt) else {
-            wantedConnection = false; stage = .failed; message = "Reconnect limit reached. Check your configuration and reconnect manually."
+            wantedConnection = false; stage = .failed
+            if message.isEmpty || message.hasPrefix("Reconnect limit reached") {
+                message = "Reconnect limit reached. Check your configuration and reconnect manually."
+            }
             // Exhausting app retries must not silently disable the user's OS on-demand policy.
             if manager?.isOnDemandEnabled == true { message += " System on-demand remains enabled; disconnect explicitly to disable it." }
             return

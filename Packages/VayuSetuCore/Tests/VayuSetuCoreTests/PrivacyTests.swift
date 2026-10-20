@@ -64,7 +64,7 @@ final class PrivacyTests: XCTestCase {
         let value = try rule("example.com")
         XCTAssertThrowsError(try SafariRuleCompiler.compile(Array(repeating: value, count: FilterParser.domainLimit + 1)))
         let disabled = try XCTUnwrap(JSONSerialization.jsonObject(with: SafariRuleCompiler.compile([])) as? [[String:Any]])
-        XCTAssertEqual((disabled.first?["trigger"] as? [String:String])?["url-filter"], "^$")
+        XCTAssertEqual((disabled.first?["trigger"] as? [String:String])?["url-filter"], SafariRuleCompiler.placeholderFilter)
     }
     func testUnknownIsDistinctAndStaleGreenExpires() {
         let now = Date()

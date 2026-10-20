@@ -11,7 +11,9 @@ import VayuSetuCore
         precondition(db!.dnsIntent() == nil)
         try db!.setDNSIntent(true); precondition(db!.dnsIntent() == true)
         let saved = FilterConfiguration()
-        precondition(saved.subscriptions.count == 3 && saved.subscriptions.allSatisfy { !$0.enabled && $0.rules.isEmpty })
+        // Keep this contract tied to the curated catalogue so adding a vetted
+        // default list cannot silently make the storage audit fail.
+        precondition(saved.subscriptions.count == FilterCatalog.defaults.count && saved.subscriptions.allSatisfy { !$0.enabled && $0.rules.isEmpty })
         let data = try JSONEncoder().encode(saved)
         try db!.save(data)
         let roundTrip = try db!.read(); precondition(roundTrip == data)

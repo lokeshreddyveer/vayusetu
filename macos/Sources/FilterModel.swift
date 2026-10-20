@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Shared by the Mac app and the network-filter system extension: what a connection looks like, what a rule looks like, how a rule is chosen,
@@ -100,6 +101,7 @@ enum AlertRule {
     static func make(for q: PendingQuestion, allow: Bool, scope: AlertScope, lifetime: AlertLifetime, now: Date = Date()) -> NetRule? {
         guard lifetime != .once else { return nil }
         var rule = NetRule(app: q.app, host: "*", port: "*", action: allow ? .allow : .block, note: "From a question")
+        rule.team = q.team; rule.parent = q.parent
         switch scope {
         case .app: break
         case .domain: rule.host = domain(of: q.host)
@@ -124,11 +126,15 @@ enum FilterMode: String, Codable, CaseIterable, Identifiable {
     /// Everything is blocked except what a rule or an allow list lets through.
     case blockAll
     var id: String { rawValue }
-    var title: String { switch self { case .normal: "Ask me"; case .passive: "Passive"; case .blockAll: "Block all" } }
+    /// Product-facing names. The aliases preserve the on-disk names used by
+    /// earlier builds while making the three operating modes explicit.
+    static var requireApproval: Self { .normal }
+    static var allowAll: Self { .passive }
+    var title: String { switch self { case .normal: "Require approval"; case .passive: "Allow all"; case .blockAll: "Block all" } }
     var detail: String {
         switch self {
-        case .normal: "Unknown connections follow your prompt settings."
-        case .passive: "No prompts. Your rules and lists still apply; new connections follow the choice below."
+        case .normal: "Unknown applications pause until you approve or block them. Existing rules and lists still apply."
+        case .passive: "No prompts. Rules and lists still apply; unmatched connections are allowed."
         case .blockAll: "Everything is blocked except what an allow rule or an allow list lets through."
         }
     }
@@ -150,6 +156,10 @@ struct NetRule: Codable, Identifiable, Hashable {
     var expires: Date? = nil
     var schedule: NetSchedule? = nil
     var direction: NetDirection? = nil
+    /// Optional signer/process lineage constraints. Existing rules decode with
+    /// nil and keep their previous behavior.
+    var team: String? = nil
+    var parent: String? = nil
     var groupName: String { group ?? "Default" }
 }
 
@@ -166,6 +176,10 @@ struct NetList: Codable, Identifiable, Hashable {
     var updated: Date? = nil
     /// The outcome of the last refresh, in words.
     var status: String? = nil
+    /// Optional enterprise pin. A normal user list remains backward compatible;
+    /// a managed list refuses content whose checksum does not match this value.
+    var expectedSHA256: String? = nil
+    var checksum: String? = nil
     static let maximumEntries = 400_000
     var due: Bool { guard source != nil, enabled else { return false }; return updated.map { Date().timeIntervalSince($0) >= Double(refreshHours) * 3600 } ?? true }
 }
@@ -175,6 +189,25 @@ struct HitCount: Codable, Hashable { var count = 0; var last = Date.distantPast 
 struct FilterUsage: Codable, Equatable {
     var rules: [String: HitCount] = [:]
     var lists: [String: HitCount] = [:]
+}
+
+struct FilterAuditRecord: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var time = Date()
+    var actor: String
+    var action: String
+    var detail: String
+    var previousHash: String? = nil
+    var hash: String
+    init(time: Date = Date(), actor: String, action: String, detail: String, previousHash: String? = nil) {
+        self.time = time; self.actor = actor; self.action = action; self.detail = detail; self.previousHash = previousHash
+        let chain = previousHash ?? ""
+        let material = "\(time.timeIntervalSince1970)|\(actor)|\(action)|\(detail)|\(chain)"
+        hash = SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    func verifies() -> Bool {
+        FilterAuditRecord(time: time, actor: actor, action: action, detail: detail, previousHash: previousHash).hash == hash
+    }
 }
 
 struct FilterSettings: Codable, Equatable {
@@ -249,6 +282,13 @@ struct PendingQuestion: Codable, Identifiable, Hashable {
 /// Chooses the rule that applies to a connection. The most specific rule wins; at equal specificity a block beats an allow.
 /// Specificity counts: a named app (2), a destination host (exact address 3, a domain, wildcard or address range 2), a port (1), a direction (1).
 enum NetRuleEngine {
+    static func isValidRule(_ rule: NetRule) -> Bool {
+        guard !rule.app.isEmpty, rule.app.count <= 256, rule.app == "*" || rule.app.allSatisfy({ $0.isASCII && !$0.isWhitespace }),
+              isValidDestination(rule.host), rule.port == "*" || (Int(rule.port).map { (1...65535).contains($0) } ?? false) else { return false }
+        if let team = rule.team, team.count > 64 || team.contains(where: { $0.isWhitespace }) { return false }
+        if let parent = rule.parent, parent.isEmpty || parent.count > 256 || parent.contains(where: { $0.isWhitespace }) { return false }
+        return true
+    }
     /// A rule counts only if it has not expired, its group is switched on, and the current time is inside its schedule (if it has one).
     static func isActive(_ rule: NetRule, now: Date, settings: FilterSettings) -> Bool {
         if let expires = rule.expires, expires <= now { return false }
@@ -256,9 +296,9 @@ enum NetRuleEngine {
         if let schedule = rule.schedule, !schedule.contains(now) { return false }
         return true
     }
-    static func decide(app: String, host: String, port: String, address: String? = nil, outbound: Bool = true, rules: [NetRule], settings: FilterSettings, now: Date = Date()) -> (action: NetAction, rule: NetRule?) {
+    static func decide(app: String, host: String, port: String, address: String? = nil, outbound: Bool = true, team: String? = nil, parent: String? = nil, rules: [NetRule], settings: FilterSettings, now: Date = Date()) -> (action: NetAction, rule: NetRule?) {
         var best: (score: Int, rule: NetRule)?
-        for rule in rules where isActive(rule, now: now, settings: settings) && matches(rule, app: app, host: host, port: port, address: address, outbound: outbound) {
+        for rule in rules where isActive(rule, now: now, settings: settings) && matches(rule, app: app, host: host, port: port, address: address, outbound: outbound, team: team, parent: parent) {
             let score = specificity(rule)
             if let current = best {
                 if score > current.score || (score == current.score && rule.action == .block && current.rule.action == .allow) { best = (score, rule) }
@@ -272,10 +312,14 @@ enum NetRuleEngine {
         if rule.host != "*" { score += isAddress(rule.host) ? 3 : 2 }
         if rule.port != "*" { score += 1 }
         if let direction = rule.direction, direction != .any { score += 1 }
+        if rule.team != nil { score += 2 }
+        if rule.parent != nil { score += 1 }
         return score
     }
-    static func matches(_ rule: NetRule, app: String, host: String, port: String, address: String? = nil, outbound: Bool = true) -> Bool {
+    static func matches(_ rule: NetRule, app: String, host: String, port: String, address: String? = nil, outbound: Bool = true, team: String? = nil, parent: String? = nil) -> Bool {
         guard rule.app == "*" || rule.app == app else { return false }
+        guard rule.team == nil || rule.team == team else { return false }
+        guard rule.parent == nil || rule.parent == parent else { return false }
         guard rule.port == "*" || rule.port == port else { return false }
         switch rule.direction ?? .any { case .any: break; case .outbound: if !outbound { return false }; case .inbound: if outbound { return false } }
         return hostMatches(rule.host, host, address: address)
@@ -454,4 +498,5 @@ struct NetListIndex {
     func lists(reply: @escaping (Data) -> Void)
     func setLists(_ data: Data, reply: @escaping (Bool) -> Void)
     func usage(reply: @escaping (Data) -> Void)
+    func audit(reply: @escaping (Data) -> Void)
 }

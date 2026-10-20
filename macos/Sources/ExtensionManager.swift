@@ -58,7 +58,20 @@ import Combine
             let best = live.max { (Int($0.bundleVersion) ?? 0) < (Int($1.bundleVersion) ?? 0) }
             return Component(id: id, name: name, installed: best?.bundleVersion, bundled: bundledVersion(id), enabled: best?.isEnabled ?? false, waitingForApproval: live.contains { $0.isAwaitingUserApproval })
         }
-        components = [component(tunnelIdentifier, "VPN and DNS tunnel"), component(Self.filterIdentifier, "Network filter")].filter { $0.bundled != nil }
+        let all = [component(tunnelIdentifier, "VPN and DNS tunnel"), component(Self.filterIdentifier, "Network filter")]
+        components = all.filter { $0.bundled != nil }
+        // A launch can find an extension that was activated by a previous
+        // process. Reconcile that system state into the published flags so
+        // Home does not submit a redundant activation request and exhaust the
+        // reconnect budget.
+        if let tunnel = all.first(where: { $0.id == tunnelIdentifier }) {
+            activated = tunnel.installed != nil && tunnel.enabled && !tunnel.outdated && !tunnel.waitingForApproval
+            if activated { message = "" }
+        }
+        if let filter = all.first(where: { $0.id == Self.filterIdentifier }) {
+            filterActivated = filter.installed != nil && filter.enabled && !filter.outdated && !filter.waitingForApproval
+            if filterActivated { filterMessage = "" }
+        }
     }
     /// One button: installs the newer version of whatever is out of date, and asks again for anything waiting on approval. Replacing the tunnel disconnects it for a moment.
     func updateComponents() {
@@ -109,7 +122,7 @@ import Combine
             self.requesting = false
             self.activated = result == .completed
             if self.activated { self.completion?() }; self.completion = nil
-            self.message = result == .completed ? "Extension activated. You can request a VPN connection." : "Extension activation will finish after restarting this Mac."
+            self.message = result == .completed ? "" : "Extension activation will finish after restarting this Mac."
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {

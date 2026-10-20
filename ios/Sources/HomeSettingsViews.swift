@@ -542,6 +542,7 @@ struct VSSecurityCenter: View {
         VSCardList {
             VSSection("Connection protection") {
                 VSRow(title: "Tunnel", subtitle: tunnel.statusText, icon: "network.badge.shield.half.filled")
+                VSNavLink { VSSecurityInsightsScreen(store: store, tunnel: tunnel) } label: { VSRow(title: "Security insights", subtitle: "Local evidence, recovery state and limitations", icon: "sparkles", chevron: true) }
                 VSNavLink { VSNetworkCoverageScreen(tunnel: tunnel) } label: { VSRow(title: "Traffic routed outside the tunnel", subtitle: "Review configured and OS-required exceptions", icon: "arrow.triangle.branch", chevron: true) }
                 Text("On-demand reconnect is enabled for strict routing. iOS still keeps some network-control and captive-portal traffic outside a personal packet tunnel.").font(.footnote).foregroundStyle(.secondary)
             }
@@ -612,6 +613,31 @@ struct VSSecurityCenter: View {
             if !expected.isEmpty, ExitComparison.canonical(expected, family: ProfileParser.ipFamily(expected) ?? 0) != canonical { observerMessage = "Observed address differs from the expected VPN exit · investigate. This sample is not a device-wide leak verdict." }
             else { observerMessage = "Observer returned a fresh response · \(tunnel.statusText). This sample does not prove device-wide isolation." }
         } catch { observerMessage = error is URLError ? "Observer unavailable on this route. That alone does not prove the tunnel failed." : error.localizedDescription }
+    }
+}
+
+struct VSSecurityInsightsScreen: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var tunnel: TunnelController
+    private var snapshots: [ProtectionSnapshot] { ProtectionSubsystem.allCases.map { store.protection($0) } }
+    var body: some View {
+        VSCardList {
+            VSSection("Observed protection") {
+                ForEach(snapshots, id: \.subsystem) { snapshot in
+                    VSRow(title: snapshot.subsystem.rawValue.uppercased(), subtitle: snapshot.reason, icon: snapshot.observed == .active ? "checkmark.shield.fill" : "exclamationmark.shield.fill", value: snapshot.label)
+                }
+                Text("A green state reflects the strongest evidence VayuSetu has observed. Configuration alone never becomes a verified result.").font(.footnote).foregroundStyle(.secondary)
+            }
+            VSSection("Recovery posture") {
+                VSRow(title: "Tunnel stage", subtitle: tunnel.stage.rawValue, icon: "arrow.clockwise", value: tunnel.statusText)
+                VSRow(title: "Automatic reconnect", subtitle: "Retries are bounded and revalidated after network changes.", icon: "repeat", value: tunnel.autoReconnect ? "On" : "Off")
+                VSRow(title: "Evidence", subtitle: "Run Connection Verification after Wi-Fi, cellular, sleep/wake or profile changes.", icon: "checkmark.circle", value: "Review")
+            }
+            VSSection("Known platform boundaries") {
+                Text("iOS does not expose arbitrary per-app packet inspection or a universal process-level firewall. Safari filtering is declarative, and apps that implement their own DNS or use Apple-reserved control traffic may bypass parts of the observed path.").font(.footnote)
+                Text("Use the verification screens and a controlled observer to validate the current route. VayuSetu does not claim that a saved VPN profile alone proves leak isolation.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }.vsList().vsHeader("Security Insights")
     }
 }
 

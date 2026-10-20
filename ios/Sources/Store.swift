@@ -296,7 +296,9 @@ import VayuSetuCore
                 }
             }
             let id = UUID()
-            let profile = SavedProfile(id: id, name: url.deletingPathExtension().lastPathComponent, addresses: summary.addresses, dns: summary.dns, endpoints: summary.endpoints, peerCount: summary.peerCount, fullTunnel: summary.fullTunnel, created: Date())
+            let rawName = url.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+            let profileName = String((rawName.isEmpty ? "Imported profile" : rawName).prefix(80))
+            let profile = SavedProfile(id: id, name: profileName, addresses: summary.addresses, dns: summary.dns, endpoints: summary.endpoints, peerCount: summary.peerCount, fullTunnel: summary.fullTunnel, created: Date())
             try Vault.put(data, account: id.uuidString)
             do { try save(profiles + [profile]) } catch { try? Vault.delete(id.uuidString); throw error }
             profiles.append(profile); if !tunnel.running { selected = id; selectedManualProfile = nil }
@@ -352,7 +354,13 @@ import VayuSetuCore
         } else {
             guard mode.supported else { throw AppIssue(message: RoutingMode.directDNSUnavailable) }
             guard let profile = active, let data = try Vault.get(profile.id.uuidString) else { throw AppIssue(message: "Select a saved VPN profile with available credentials first.") }
-            let parsed = try ProfileParser.parse(String(decoding: data, as: UTF8.self))
+            let parsed: WireGuardSummary
+            do { parsed = try ProfileParser.parse(String(decoding: data, as: UTF8.self)) }
+            catch {
+                let text = String(decoding: data, as: UTF8.self)
+                filtering.record("Saved profile \(profile.name) did not parse: \(data.count) bytes, interface section \(text.contains("[Interface]")), key line \(text.contains("PrivateKey")), peers \(text.components(separatedBy: "[Peer]").count - 1)")
+                throw data.isEmpty ? AppIssue(message: "The saved keys for \(profile.name) are missing. Edit the profile and import its configuration file again.") : error
+            }
             try ProfileParser.validateTunnel(parsed)
             _ = try DNSService.endpoint(endpoint)
             if !bootstrapAddresses.isEmpty { _ = try ResolverBootstrap.validated(bootstrapAddresses) }
@@ -397,8 +405,10 @@ import VayuSetuCore
         // Reject unusable targets before changing selection or stopping the existing VPN.
         do {
             guard mode.supported else { throw AppIssue(message: RoutingMode.directDNSUnavailable) }
-            guard let data = try Vault.get(profile.id.uuidString), let configuration = String(data: data, encoding: .utf8) else { throw AppIssue(message: "Profile keys are missing. Import the original configuration again.") }
-            let parsed = try ProfileParser.parse(configuration)
+            guard let data = try Vault.get(profile.id.uuidString), !data.isEmpty, let configuration = String(data: data, encoding: .utf8) else { filtering.record("Profile keys missing in Keychain for \(profile.name)"); throw AppIssue(message: "The saved keys for \(profile.name) are missing. Edit the profile and import its configuration file again.") }
+            let parsed: WireGuardSummary
+            do { parsed = try ProfileParser.parse(configuration) }
+            catch { filtering.record("Saved profile \(profile.name) did not parse: \(configuration.utf8.count) bytes, interface section \(configuration.contains("[Interface]")), key line \(configuration.contains("PrivateKey")), peers \(configuration.components(separatedBy: "[Peer]").count - 1)"); throw error }
             try ProfileParser.validateTunnel(parsed)
             _ = try DNSService.endpoint(endpoint)
             if requireNativeIPv6 && (!parsed.fullTunnel || !parsed.addresses.contains(where: { ProfileParser.ipFamily(String($0.split(separator: "/")[0])) == 6 })) { throw AppIssue(message: "This policy requires a native IPv6 interface and full IPv6 default route. Choose a dual-stack profile.") }
@@ -1068,6 +1078,20 @@ extension AppStore {
         case .vpn: next.vpnEnabled = vpnPill == .off
         case .dns: next.dnsEnabled = dnsPill == .off
         case .adblock: next.safariAdblockEnabled = adblockPill == .off
+        }
+        protectionNotice = await applySelection(next)
+    }
+
+    /// Applies the value delivered by a native Toggle. This is deliberately
+    /// separate from togglePill: SwiftUI may replay a binding setter while a
+    /// protection state is settling, and deriving the next value again can
+    /// turn a just-established tunnel back off.
+    func setPill(_ pill: ProtectionPill, enabled: Bool) async {
+        var next = observedSelection
+        switch pill {
+        case .vpn: next.vpnEnabled = enabled
+        case .dns: next.dnsEnabled = enabled
+        case .adblock: next.safariAdblockEnabled = enabled
         }
         protectionNotice = await applySelection(next)
     }
