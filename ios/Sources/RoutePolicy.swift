@@ -104,8 +104,11 @@ enum ResolverBootstrap {
     // five-second lookup then fails the whole start. This tries a bounded number of times with growing pauses and checks the network path between
     // tries, and only as a last step reuses addresses this process resolved earlier, while they are still recent.
     struct RetryPolicy {
-        var attemptTimeout: TimeInterval = 3
-        var delays: [TimeInterval] = [0.5, 1, 2]                 // pause before the 2nd, 3rd and 4th try: the whole wait is at most about 16 s
+        var attemptTimeout: TimeInterval = 2.5
+        var delays: [TimeInterval] = [0.5, 1, 2]                 // pause before the 2nd, 3rd and 4th try
+        /// Everything together (lookups, pauses, path waits) stops here. The app's own connection deadline is 30 s by default and can be set as low as
+        /// 10 s, so this has to leave room for the rest of start-up inside the shortest one.
+        var totalBudget: TimeInterval = 8
         var maximumCacheAge: TimeInterval = 6 * 3600
         var attempts: Int { delays.count + 1 }
     }
@@ -142,22 +145,27 @@ enum ResolverBootstrap {
                                  lookup: @escaping (String) throws -> [String] = systemLookup, pathSatisfied: () -> Bool = networkPathSatisfied,
                                  pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
         if ProfileParser.ipFamily(host) != nil { return (try validated([host]), .live(attempt: 1)) }
-        var lastIssue = "no answer"; var pathWasDown = false
+        var lastIssue = "no answer"; var pathWasDown = false; var spent: TimeInterval = 0; var tries = 0
         for attempt in 1...policy.attempts {
             if attempt > 1 {
-                pause(policy.delays[attempt - 2])
+                let wait = min(policy.delays[attempt - 2], max(0, policy.totalBudget - spent))
+                pause(wait); spent += wait
                 // Give the path one more short chance to come back before spending a lookup on it.
                 var waited = 0.0
-                while !pathSatisfied() && waited < policy.attemptTimeout { pathWasDown = true; pause(0.25); waited += 0.25 }
+                while !pathSatisfied() && waited < policy.attemptTimeout && spent + 0.25 < policy.totalBudget { pathWasDown = true; pause(0.25); waited += 0.25; spent += 0.25 }
             }
+            let remaining = policy.totalBudget - spent
+            if remaining < 0.5 { break }                                    // not enough budget left for a lookup worth making
+            tries += 1
+            let began = Date()
             do {
-                let found = try resolve(host: host, timeout: policy.attemptTimeout, lookup: lookup)
+                let found = try resolve(host: host, timeout: min(policy.attemptTimeout, remaining), lookup: lookup)
                 cache.store(host, found, at: now())
                 return (found, .live(attempt: attempt))
-            } catch { lastIssue = (error as? AppIssue)?.message ?? "lookup failed" }
+            } catch { lastIssue = (error as? AppIssue)?.message ?? "lookup failed"; spent += Date().timeIntervalSince(began) }
         }
         if let kept = cache.recent(host, now: now(), maximumAge: policy.maximumCacheAge) { return (kept.addresses, .cached(age: kept.age)) }
-        throw AppIssue(message: "Resolver bootstrap failed after \(policy.attempts) tries" + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
+        throw AppIssue(message: "Resolver bootstrap failed after \(tries) \(tries == 1 ? "try" : "tries")" + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
     }
     private static func systemLookup(_ host: String) throws -> [String] {
         var hints = addrinfo(); hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG

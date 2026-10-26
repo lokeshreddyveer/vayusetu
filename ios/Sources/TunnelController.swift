@@ -309,7 +309,8 @@ import AppKit
                     // outcome and under the wrong cause.
                     watchdog?.cancel()
                     scheduleRetry()
-                    if previous == .connecting || previous == .reasserting, wantedConnection, retryTask == nil { failStartAttempt() }
+                    if case .failed(let reason) = StartAttempt.outcome(wasStarting: previous == .connecting || previous == .reasserting, connectionWanted: wantedConnection,
+                                                                      retryScheduled: retryTask != nil, autoReconnect: autoReconnect) { failStartAttempt(reason) }
                 }
             default: break
             }
@@ -975,10 +976,9 @@ import AppKit
     }
     /// The tunnel stopped while starting and no reconnect is coming (reconnecting is off, or the network is down): say so now instead of waiting for
     /// a deadline. It is reported as a failure, never as a connection.
-    private func failStartAttempt() {
+    private func failStartAttempt(_ reason: String) {
         wantedConnection = false; stage = .failed
-        let reason = autoReconnect ? "The network was not available to reconnect." : "Automatic reconnect is off."
-        message = "The tunnel stopped while starting. " + reason + " Connect again to retry."   // the system's own error text, when it arrives, replaces this
+        message = reason   // the system's own error text, when it arrives, replaces this
         record("Start attempt failed: the tunnel stopped before it was established; no reconnect scheduled", severity: .warning)
     }
     private func scheduleRetry() {

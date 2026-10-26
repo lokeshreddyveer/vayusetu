@@ -145,6 +145,15 @@ import NetworkExtension
             do { _ = try ResolverBootstrap.resolveResilient(host: "never.test", policy: policy, cache: ResolverBootstrap.Cache(), lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { false }, pause: { _ in waits += 1 }); fatalError("Unresolvable host resolved") }
             catch { checks += 1; require((error as? AppIssue)?.message.contains("network was unavailable") == true, "failure reports that the network path was down") }
             require(waits <= 3 + 3 * 12, "path waiting is bounded: \(waits) pauses")
+            var spentPauses: TimeInterval = 0; var shortCalls = 0
+            var tight = ResolverBootstrap.RetryPolicy(); tight.totalBudget = 1.2
+            do { _ = try ResolverBootstrap.resolveResilient(host: "tight.test", policy: tight, cache: ResolverBootstrap.Cache(), lookup: { _ in shortCalls += 1; throw AppIssue(message: "down") }, pathSatisfied: { false }, pause: { spentPauses += $0 }); fatalError("Unresolvable host resolved") }
+            catch { checks += 1 }
+            require(spentPauses <= tight.totalBudget + 0.001 && shortCalls < tight.attempts, "total waiting never exceeds the budget (\(spentPauses) s of \(tight.totalBudget) s, \(shortCalls) lookups)")
+            var allPauses: TimeInterval = 0
+            do { _ = try ResolverBootstrap.resolveResilient(host: "full.test", cache: ResolverBootstrap.Cache(), lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { false }, pause: { allPauses += $0 }); fatalError("Unresolvable host resolved") }
+            catch { checks += 1 }
+            require(allPauses <= ResolverBootstrap.RetryPolicy().totalBudget + 0.001 && ResolverBootstrap.RetryPolicy().totalBudget < 10, "default budget stays inside the shortest connection deadline (10 s)")
             let literalHost = try ResolverBootstrap.resolveResilient(host: "9.9.9.9", cache: ResolverBootstrap.Cache(), lookup: { _ in fatalError("Literal looked up") }, pathSatisfied: { false }, pause: { _ in fatalError("Literal waited") })
             require(literalHost.addresses == ["9.9.9.9"], "literal address never waits or looks up")
             let poisoned = ResolverBootstrap.Cache(); poisoned.store("bad.test", ["127.0.0.1"], at: Date())
