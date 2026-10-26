@@ -16,6 +16,17 @@ import VayuSetuCore
     private var watch = InstallWatch()
     private var filterWatch = InstallWatch()
     private var watcher: Task<Void, Never>?
+    /// Which request is which. The system reports every request through this one delegate, so an answer to a properties check, or a late answer to a request
+    /// that was already given up on, must not be mistaken for the outcome of the install that is under way now.
+    private var tunnelRequestID: ObjectIdentifier?
+    private var filterRequestID: ObjectIdentifier?
+    private var propertyRequestIDs = Set<ObjectIdentifier>()
+    private enum Origin { case property, tunnel(current: Bool), filter(current: Bool) }
+    private func origin(of id: ObjectIdentifier, identifier: String) -> Origin {
+        if propertyRequestIDs.contains(id) { return .property }
+        if identifier == Self.filterIdentifier { return .filter(current: id == filterRequestID) }
+        return .tunnel(current: id == tunnelRequestID)
+    }
     // The network filter is a second system extension, activated on its own.
     @Published var filterRequesting = false
     @Published var filterActivated = false
@@ -56,8 +67,14 @@ import VayuSetuCore
         for id in ids {
             let request = OSSystemExtensionRequest.propertiesRequest(forExtensionWithIdentifier: id, queue: .main)
             request.delegate = self
+            propertyRequestIDs.insert(ObjectIdentifier(request))
             OSSystemExtensionManager.shared.submitRequest(request)
         }
+    }
+    /// A properties request that failed must still count as answered; otherwise no later check could ever run.
+    private func finishCheckFailed(_ id: String) {
+        pendingChecks = max(0, pendingChecks - 1)
+        report?("Could not read the installed state of \(id == Self.filterIdentifier ? "the network filter" : "the VPN extension")", .warning)
     }
     private func finishCheck(_ id: String, _ properties: [OSSystemExtensionProperties]) {
         found[id] = properties; pendingChecks = max(0, pendingChecks - 1)
@@ -107,7 +124,7 @@ import VayuSetuCore
         filterCompletion = onReady; filterRequesting = true; filterWatch.begin(at: Date()); startWatching()
         filterMessage = "Requesting the network filter. macOS may ask for approval in System Settings."
         let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.filterIdentifier, queue: .main)
-        request.delegate = self
+        request.delegate = self; filterRequestID = ObjectIdentifier(request)
         OSSystemExtensionManager.shared.submitRequest(request)
     }
     func activate(onReady: (() -> Void)? = nil, onFailure: ((String) -> Void)? = nil) {
@@ -125,7 +142,7 @@ import VayuSetuCore
         message = "Requesting the VPN extension. macOS may ask for approval in System Settings."
         let id = (Bundle.main.bundleIdentifier ?? "app.vayusetu.macos") + ".tunnel"
         let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: id, queue: .main)
-        request.delegate = self
+        request.delegate = self; tunnelRequestID = ObjectIdentifier(request)
         OSSystemExtensionManager.shared.submitRequest(request)
     }
     /// Ends a pending tunnel request that did not succeed: everything waiting on it is told why, and the reason is written to the log.
@@ -166,8 +183,9 @@ import VayuSetuCore
         }
     }
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
-        let isFilter = request.identifier == Self.filterIdentifier
+        let isFilter = request.identifier == Self.filterIdentifier, rid = ObjectIdentifier(request)
         Task { @MainActor in
+            if case .property = self.origin(of: rid, identifier: request.identifier) { return }
             if isFilter { self.filterWatch.needsApproval(at: Date()) } else { self.watch.needsApproval(at: Date()) }
             self.report?((isFilter ? "Network filter" : "VPN extension") + " is waiting for approval in System Settings", .warning)
         }
@@ -175,8 +193,10 @@ import VayuSetuCore
         Task { @MainActor in self.message = "Approve VayuSetu’s network extension in System Settings → Privacy & Security (or Login Items & Extensions on newer macOS)." }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
-        if request.identifier == Self.filterIdentifier {
+        let rid = ObjectIdentifier(request), identifier = request.identifier
+        if identifier == Self.filterIdentifier {
             Task { @MainActor in
+                if case .property = self.origin(of: rid, identifier: identifier) { return }
                 self.filterWatch.finish()
                 if result != .completed { self.report?("Network filter install will finish after a restart of this Mac", .warning) }
                 self.filterRequesting = false; self.filterActivated = result == .completed
@@ -186,6 +206,13 @@ import VayuSetuCore
             return
         }
         Task { @MainActor in
+            switch self.origin(of: rid, identifier: identifier) {
+            case .property: return
+            case .tunnel(let current):
+                // A late success of a request that was given up on is still true and is kept; a late "not yet" must not disturb the request under way now.
+                if !current { if result == .completed { self.activated = true; self.message = ""; self.report?("VPN extension installed (late answer)", .info) }; return }
+            case .filter: return
+            }
             self.requesting = false; self.watch.finish()
             self.activated = result == .completed
             let waiting = self.completions; self.completions = []
@@ -201,8 +228,10 @@ import VayuSetuCore
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        if request.identifier == Self.filterIdentifier {
+        let rid = ObjectIdentifier(request), identifier = request.identifier
+        if identifier == Self.filterIdentifier {
             Task { @MainActor in
+                if case .property = self.origin(of: rid, identifier: identifier) { self.propertyRequestIDs.remove(rid); self.finishCheckFailed(identifier); return }
                 self.filterWatch.finish()
                 self.filterRequesting = false; self.filterActivated = false; self.filterCompletion = nil
                 let why = Self.reason(for: error)
@@ -213,6 +242,12 @@ import VayuSetuCore
         }
         Task { @MainActor in
             let why = Self.reason(for: error)
+            switch self.origin(of: rid, identifier: identifier) {
+            case .property: self.propertyRequestIDs.remove(rid); self.finishCheckFailed(identifier); return
+            case .tunnel(let current):
+                if !current { self.report?("An earlier VPN extension install request failed after it was given up on: " + why, .warning); return }
+            case .filter: return
+            }
             self.message = "The VPN extension could not be installed. " + why
             self.failActivation(self.message, event: "VPN extension install failed: " + why)
         }
@@ -224,8 +259,8 @@ import VayuSetuCore
         return ExtensionFailure(code: ns.code).explanation
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, foundProperties properties: [OSSystemExtensionProperties]) {
-        let id = request.identifier
-        Task { @MainActor in self.finishCheck(id, properties) }
+        let id = request.identifier, rid = ObjectIdentifier(request)
+        Task { @MainActor in self.propertyRequestIDs.remove(rid); self.finishCheck(id, properties) }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
         .replace
