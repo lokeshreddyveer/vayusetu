@@ -82,6 +82,8 @@ restore() {
   say ""; say "Restoring the state found at the start (tunnel $INIT_NC, selection $INIT_SEL)"
   link both off
   wait_nc Disconnected 60
+  # both/off stops the tunnel but keeps the saved choices, so put the choices back as found as well
+  sleep 2; link vpn off; sleep 2; link dns off
   local tries=0; sleep 3
   while [ $tries -lt 8 ] && ! echo "$(selection)" | grep -q '"vpnEnabled":false' ; do sleep 2; tries=$((tries+1)); done
   local bad=0
@@ -92,6 +94,7 @@ restore() {
   if [ $bad = 0 ]; then say "RESTORED and verified independently: tunnel, saved selection, default route and resolver match the start"
   else say "RESTORE NOT VERIFIED. Stop. Nothing else was changed. See above; recovery steps are in Docs/Testing/Runtime-Security-Verification.md."; fail=$((fail+1)); fi
   say ""; say "Result: $pass passed, $fail failed, $nv not verified.   Evidence: $OUT"
+  record_run
   if [ $fail -gt 0 ]; then exit 1; fi; if [ $nv -gt 0 ]; then exit 2; fi; exit 0
 }
 
