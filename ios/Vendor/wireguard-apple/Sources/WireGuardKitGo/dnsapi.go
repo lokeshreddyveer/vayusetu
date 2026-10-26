@@ -68,7 +68,7 @@ func wgDNSStats() *C.char {
 // Quad9 reject HTTP/1.1), connects to bootstrap addresses so resolving the resolver never re-enters the tunnel, and
 // reuses connections.
 var (
-	upstreamMu   sync.Mutex
+	upstreamMu    sync.Mutex
 	upstreamsOpen = map[int32]*upstream{}
 	upstreamNext  int32
 )
@@ -119,6 +119,23 @@ func wgDNSUpstreamExchange(handle int32, query *C.uchar, queryLength C.int, out 
 	}
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(out)), len(reply)), reply)
 	return C.int(len(reply))
+}
+
+// wgDNSUpstreamStats returns what the resolver behind a handle has done, as JSON, or NULL for an unknown handle. Free with free().
+//
+//export wgDNSUpstreamStats
+func wgDNSUpstreamStats(handle int32) *C.char {
+	upstreamMu.Lock()
+	u := upstreamsOpen[handle]
+	upstreamMu.Unlock()
+	if u == nil {
+		return nil
+	}
+	data, err := json.Marshal(u.stats.snapshot())
+	if err != nil {
+		return nil
+	}
+	return C.CString(string(data))
 }
 
 //export wgDNSUpstreamClose

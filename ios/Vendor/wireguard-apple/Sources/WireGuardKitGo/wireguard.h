@@ -23,9 +23,12 @@ extern const char *wgVersion();
 extern int32_t wgDNSConfigure(const char *settings);
 extern void wgDNSReload(void);
 extern char *wgDNSStats(void);
+extern void wgDNSDomainsEnable(int on);
+extern char *wgDNSDomainsTake(void);
 /* VayuSetu: shared encrypted-DNS upstream client for the local DNS-only tunnel. */
 extern int32_t wgDNSUpstreamOpen(const char *settings);
 extern int wgDNSUpstreamExchange(int32_t handle, const unsigned char *query, int queryLength, unsigned char *out, int outCapacity);
+extern char *wgDNSUpstreamStats(int32_t handle);
 extern void wgDNSUpstreamClose(int32_t handle);
 
 #endif

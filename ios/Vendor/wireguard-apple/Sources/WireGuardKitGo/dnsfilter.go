@@ -56,11 +56,13 @@ type dnsConfig struct {
 	// An optional second encrypted resolver, tried only when the first fails. Never plaintext.
 	Fallback          string   `json:"fallback"`
 	FallbackBootstrap []string `json:"fallbackBootstrap"`
+	// DNS rebinding protection: a public name answered with a home-network address is answered as not existing.
+	Rebinding bool `json:"rebinding"`
 }
 
 type ruleSet struct {
 	blockSuffix, blockExact, allowSuffix, allowExact map[uint64]struct{}
-	threatSuffix, threatExact                       map[uint64]struct{}
+	threatSuffix, threatExact                        map[uint64]struct{}
 }
 
 func (r *ruleSet) count() int {
@@ -185,24 +187,27 @@ func (r *ruleSet) decide(name string) decision {
 }
 
 type dnsCounters struct {
-	Queries  uint64 `json:"queries"`
-	Answered uint64 `json:"answered"`
-	Failed   uint64 `json:"failed"`
-	Dropped  uint64 `json:"dropped"`
-	Blocked  uint64 `json:"blocked"`
-	Threats  uint64 `json:"threats"`
-	Rules    uint64 `json:"rules"`
+	Queries   uint64 `json:"queries"`
+	Answered  uint64 `json:"answered"`
+	Failed    uint64 `json:"failed"`
+	Dropped   uint64 `json:"dropped"`
+	Blocked   uint64 `json:"blocked"`
+	Threats   uint64 `json:"threats"`
+	Rules     uint64 `json:"rules"`
+	Rebinding uint64 `json:"rebinding"`
+	// What the encrypted resolver itself did (see dnsstats.go).
+	Upstream resolverSnapshot `json:"upstream"`
 }
 
 type dnsFilter struct {
-	cfg      dnsConfig
-	server   net.IP
-	rules    atomic.Pointer[ruleSet]
-	up       *upstream
-	backup   *upstream
-	inflight chan struct{}
-	queries, answered, failed, dropped, blockedCount, threatCount atomic.Uint64
-	dev      tun.Device
+	cfg                                                                        dnsConfig
+	server                                                                     net.IP
+	rules                                                                      atomic.Pointer[ruleSet]
+	up                                                                         *upstream
+	backup                                                                     *upstream
+	inflight                                                                   chan struct{}
+	queries, answered, failed, dropped, blockedCount, threatCount, rebindCount atomic.Uint64
+	dev                                                                        tun.Device
 }
 
 var (
@@ -248,7 +253,7 @@ func (f *dnsFilter) reloadRules() {
 }
 
 func (f *dnsFilter) counters() dnsCounters {
-	return dnsCounters{Queries: f.queries.Load(), Answered: f.answered.Load(), Failed: f.failed.Load(), Dropped: f.dropped.Load(), Blocked: f.blockedCount.Load(), Threats: f.threatCount.Load(), Rules: uint64(f.rules.Load().count())}
+	return dnsCounters{Queries: f.queries.Load(), Answered: f.answered.Load(), Failed: f.failed.Load(), Dropped: f.dropped.Load(), Blocked: f.blockedCount.Load(), Threats: f.threatCount.Load(), Rules: uint64(f.rules.Load().count()), Rebinding: f.rebindCount.Load(), Upstream: f.up.stats.snapshot()}
 }
 
 // ---- tun wrapper -------------------------------------------------------------------------
@@ -404,6 +409,7 @@ func (f *dnsFilter) intercept(packet []byte) bool {
 	if askedOK && decision == blocked {
 		name, end := askedName, askedEnd
 		f.blockedCount.Add(1)
+		tally.record(name, true)
 		if f.rules.Load().isThreat(name) {
 			f.threatCount.Add(1)
 		}
@@ -434,6 +440,7 @@ func (f *dnsFilter) intercept(packet []byte) bool {
 		if askedOK && decision != allowed {
 			if target := f.rules.Load().uncloaked(answer); target != "" {
 				f.blockedCount.Add(1)
+				tally.record(askedName, true)
 				if f.rules.Load().isThreat(target) {
 					f.threatCount.Add(1)
 				}
@@ -441,7 +448,17 @@ func (f *dnsFilter) intercept(packet []byte) bool {
 				return
 			}
 		}
+		// A public name answered with a home-network address is replaced by "does not exist".
+		// An explicit allow for the asked name wins, as it does for CNAME uncloaking: it is how a person exempts a name that points inward on purpose.
+		if f.cfg.Rebinding && askedOK && decision != allowed && rebindingBlocked(askedName, answer) {
+			f.blockedCount.Add(1)
+			f.rebindCount.Add(1)
+			tally.record(askedName, true)
+			f.send(q, blockedResponse(q.payload, askedEnd))
+			return
+		}
 		f.answered.Add(1)
+		tally.record(askedName, false)
 		f.send(q, answer)
 	}()
 	return true
@@ -456,6 +473,7 @@ type upstream struct {
 	ifIndex    int // utun index when queries must travel inside the VPN; 0 = outside
 	client     *http.Client
 	cache      *dnsCache
+	stats      *resolverStats
 }
 
 func newUpstream(cfg dnsConfig, dev tun.Device) (*upstream, error) {
@@ -463,7 +481,7 @@ func newUpstream(cfg dnsConfig, dev tun.Device) (*upstream, error) {
 	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "tls") {
 		return nil, errors.New("invalid resolver endpoint")
 	}
-	up := &upstream{host: u.Hostname(), path: u.Path, dot: u.Scheme == "tls", cache: newDNSCache()}
+	up := &upstream{host: u.Hostname(), path: u.Path, dot: u.Scheme == "tls", cache: newDNSCache(), stats: newResolverStats()}
 	for _, a := range cfg.Bootstrap {
 		if ip := net.ParseIP(a); ip != nil {
 			up.bootstrap = append(up.bootstrap, ip)
@@ -532,10 +550,23 @@ func (u *upstream) dial(ctx context.Context, port int) (net.Conn, error) {
 	return nil, last
 }
 
+// exchange answers from the cache when it can, otherwise asks the resolver, and counts which of those happened and how it went.
 func (u *upstream) exchange(ctx context.Context, q []byte) ([]byte, error) {
 	if cached, ok := u.cache.get(q); ok {
+		u.stats.cacheHit()
 		return cached, nil
 	}
+	start := time.Now()
+	reply, err := u.exchangeNetwork(ctx, q)
+	if err != nil {
+		u.stats.fail(err)
+	} else {
+		u.stats.ok(time.Since(start))
+	}
+	return reply, err
+}
+
+func (u *upstream) exchangeNetwork(ctx context.Context, q []byte) ([]byte, error) {
 	var reply []byte
 	var err error
 	if u.dot {

@@ -72,7 +72,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if filterOn, let resolver {
                     guard let rulesPath = DNSRuleStore.url?.path else { throw AppIssue(message: "App Group access is unavailable.") }
                     var settings: [String: Any] = ["rulesPath": rulesPath, "resolver": resolver.absoluteString, "bootstrap": addresses,
-                                                   "viaVPN": secret.dnsUpstreamDirect != true, "server": DNSTunnelAddress.server, "filtering": true]
+                                                   "viaVPN": secret.dnsUpstreamDirect != true, "server": DNSTunnelAddress.server, "filtering": true, "rebinding": secret.rebindingProtection != false]
                     if let backup = self.fallback(secret) { settings["fallback"] = backup.url.absoluteString; settings["fallbackBootstrap"] = backup.addresses }
                     let json = String(decoding: try JSONSerialization.data(withJSONObject: settings), as: UTF8.self)
                     guard wgDNSConfigure(json) == 0 else { throw AppIssue(message: "DNS filter configuration was rejected.") }
@@ -126,7 +126,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = dns
         // Filtering belongs to the VayuSetu DNS provider; other resolvers pass queries through untouched.
         dnsFilteringOn = secret.filtering == true
-        let runtime = DNSOnlyRuntime(upstream: upstream, rules: dnsFilteringOn ? DNSRuleStore.load() : nil) { [weak self] packet in
+        let runtime = DNSOnlyRuntime(upstream: upstream, rules: dnsFilteringOn ? DNSRuleStore.load() : nil, rebinding: secret.rebindingProtection != false) { [weak self] packet in
             self?.packetFlow.writePackets([packet], withProtocols: [NSNumber(value: AF_INET)])
         }
         phase = .applyingSettings
@@ -201,6 +201,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             else if dnsFilteringOn { wgDNSReload() }
             completionHandler?(nil); return
         }
+        if let request = TunnelDiagnosticRequest.domainsRequest(messageData) {
+            // The optional domain history. Both engines count at the point where a lookup is decided; the app collects and empties it.
+            if let on = request.on {
+                if let runtime = dnsRuntime { runtime.setDomainCounting(on) } else { wgDNSDomainsEnable(on ? 1 : 0) }
+                completionHandler?(Data("[]".utf8)); return
+            }
+            if let runtime = dnsRuntime { completionHandler?((try? JSONEncoder().encode(runtime.takeDomains())) ?? Data("[]".utf8)); return }
+            if let raw = wgDNSDomainsTake() { defer { free(raw) }; completionHandler?(Data(String(cString: raw).utf8)); return }
+            completionHandler?(Data("[]".utf8)); return
+        }
         if let request = TunnelDiagnosticRequest.lookupsRequest(messageData) {
             guard let runtime = dnsRuntime else { completionHandler?(Data("[]".utf8)); return }
             if let on = request.on { runtime.setLogging(on); completionHandler?(Data("[]".utf8)); return }
@@ -211,7 +221,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             // The local DNS tunnel has no WireGuard counters; report only what this runtime observed.
             if TunnelDiagnosticRequest.isReload(messageData), dnsFilteringOn { runtime.replaceRules(DNSRuleStore.load()) }
             var stats = TunnelStats(); stats.resolverAddresses = resolverAddresses; stats.diagnosticVersion = 1
-            stats.appliedPolicy = policyStore.snapshot; stats.dnsCounters = runtime.snapshot
+            stats.appliedPolicy = policyStore.snapshot; stats.dnsCounters = runtime.snapshot; stats.resources = TunnelResources.ofThisProcess()
             completionHandler(try? JSONEncoder().encode(stats)); return
         }
         if TunnelDiagnosticRequest.isReload(messageData), dnsFilteringOn { wgDNSReload() }
@@ -222,7 +232,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 defer { free(raw) }
                 stats.dnsCounters = try? JSONDecoder().decode(DNSOnlyCounters.self, from: Data(String(cString: raw).utf8))
             }
-            stats.appliedPolicy = self.policyStore.snapshot
+            stats.appliedPolicy = self.policyStore.snapshot; stats.resources = TunnelResources.ofThisProcess()
             // Only counters and handshake timestamps cross the IPC boundary, never the raw config or keys.
             for line in (config ?? "").split(separator: "\n") {
                 let pair = line.split(separator: "=", maxSplits: 1)
@@ -250,6 +260,11 @@ final class GoDNSUpstream: DNSUpstreaming, @unchecked Sendable {
         guard handle >= 0 else { throw AppIssue(message: "The encrypted DNS upstream could not be configured.") }
     }
     deinit { wgDNSUpstreamClose(handle) }
+    func statistics() -> ResolverWire? {
+        guard let raw = wgDNSUpstreamStats(handle) else { return nil }
+        defer { free(raw) }
+        return try? JSONDecoder().decode(ResolverWire.self, from: Data(String(cString: raw).utf8))
+    }
     func exchange(_ query: Data) async throws -> Data {
         let handle = self.handle
         return try await withCheckedThrowingContinuation { continuation in

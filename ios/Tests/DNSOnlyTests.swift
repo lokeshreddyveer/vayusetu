@@ -121,6 +121,27 @@ import Network
         check(DNSPacketCodec.cnameTargets(of: Data(alias)) == ["collector.tracker-cdn.net"])
         check(DNSPacketCodec.cnameTargets(of: Data([1, 2, 3])).isEmpty)
         for n in 0..<alias.count { _ = DNSPacketCodec.cnameTargets(of: Data(alias.prefix(n))) }       // no truncation may crash
+        // DNS rebinding protection: a public name answered with a home-network address is replaced; local names and "blocked" answers are not
+        func aReply(_ asked: String, _ ip: [UInt8]) -> Data { Data([0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0] + labels(asked) + [0, 1, 0, 1, 0xC0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, UInt8(ip.count)] + ip) }
+        check(DNSPacketCodec.addresses(of: aReply("evil.example.com", [192, 168, 1, 1])) == [[192, 168, 1, 1]])
+        check(DNSRebinding.shouldBlock(name: "evil.example.com", reply: aReply("evil.example.com", [192, 168, 1, 1])))
+        check(DNSRebinding.shouldBlock(name: "evil.example.com", reply: aReply("evil.example.com", [10, 0, 0, 5])))
+        check(DNSRebinding.shouldBlock(name: "evil.example.com", reply: aReply("evil.example.com", [127, 0, 0, 1])))
+        check(DNSRebinding.shouldBlock(name: "evil.example.com", reply: aReply("evil.example.com", [172, 20, 0, 1])))
+        check(!DNSRebinding.shouldBlock(name: "example.com", reply: aReply("example.com", [93, 184, 216, 34])))
+        check(!DNSRebinding.shouldBlock(name: "example.com", reply: aReply("example.com", [172, 32, 0, 1])))          // just outside 172.16/12
+        check(!DNSRebinding.shouldBlock(name: "ads.example.com", reply: aReply("ads.example.com", [0, 0, 0, 0])))     // a resolver's own "blocked"
+        check(!DNSRebinding.shouldBlock(name: "mac.tail1.ts.net", reply: aReply("mac.tail1.ts.net", [100, 64, 0, 3])))
+        for local in ["printer", "nas.local", "router.lan", "x.home.arpa", "abc.plex.direct", "mac.tail1.ts.net", "Host.Internal."] {
+            check(DNSRebinding.isExempt(local))
+            check(!DNSRebinding.shouldBlock(name: local, reply: aReply(local, [192, 168, 1, 9])))
+        }
+        check(!DNSRebinding.isExempt("evil.example.com") && !DNSRebinding.isExempt("notlocal.com"))
+        var v6 = [UInt8](repeating: 0, count: 16); v6[0] = 0xfd; v6[15] = 7
+        check(DNSRebinding.isPrivate(v6) && !DNSRebinding.isPrivate([UInt8](repeating: 0, count: 16)) && !DNSRebinding.isPrivate([0x20, 0x01] + [UInt8](repeating: 0, count: 14)))
+        check(DNSRebinding.isPrivate([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 0, 5]))
+        let rebindReply = aReply("evil.example.com", [10, 1, 1, 1])
+        for n in 0..<rebindReply.count { _ = DNSRebinding.shouldBlock(name: "evil.example.com", reply: rebindReply.prefix(n)) }   // no truncation may crash
         let cut = [UInt8](DNSPacketCodec.truncated(for: Data(query))!)
         check(cut[0] == 0xab && cut[2] & 0x80 != 0 && cut[2] & 0x02 != 0 && cut[3] & 0x0f == 0)           // oversize answer: QR + TC, NOERROR
         check(cut[5] == 1 && cut[7] == 0 && Array(cut[12...]) == Array(query[12...]))                       // question echoed, no answers
@@ -185,6 +206,13 @@ import Network
         filtering.replaceRules(DNSRuleSnapshot())
         check(filtering.snapshot.rules == 0)
 
+        // The tunnel's own cost: a share of one core from two samples, never from samples that cannot be compared.
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let a = TunnelResources(cpuSeconds: 10, memoryBytes: 50_000_000, sampledAt: t0), b = TunnelResources(cpuSeconds: 11, memoryBytes: 52_000_000, sampledAt: t0.addingTimeInterval(10))
+        check(TunnelResources.cpuShare(from: a, to: b).map { abs($0 - 0.1) < 0.0001 } == true)
+        check(TunnelResources.cpuShare(from: b, to: a) == nil && TunnelResources.cpuShare(from: a, to: TunnelResources(cpuSeconds: 11, memoryBytes: 1, sampledAt: t0.addingTimeInterval(0.2))) == nil)
+        check((TunnelResources.ofThisProcess()?.memoryBytes ?? 0) > 1_000_000)
+        check((try? JSONDecoder().decode(TunnelStats.self, from: Data("{}".utf8)))?.resources == nil)     // an older tunnel sends no resources
         // The lookup list is off until asked for, records names and results while on, and is dropped when switched off.
         let logged = DNSOnlyRuntime(upstream: DNSUpstreamClient(doh), rules: { var r = DNSRuleSnapshot(); r.blockSuffix = [h("example.com")]; return r }()) { _ in }
         logged.handle(datagram(payload: query))
@@ -198,6 +226,25 @@ import Network
         check(logged.recentQueries(after: 0).isEmpty)
         check(TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookups(on: true))?.on == true && TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookups(on: false))?.on == false)
         check(TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.lookupsAfter(42))?.after == 42 && TunnelDiagnosticRequest.lookupsRequest(TunnelDiagnosticRequest.statistics) == nil)
+
+        // The optional domain history: counts only, off until asked, emptied by every take, dropped when switched off, bounded in size.
+        let counted = DNSOnlyRuntime(upstream: DNSUpstreamClient(doh), rules: { var r = DNSRuleSnapshot(); r.blockSuffix = [h("example.com")]; return r }()) { _ in }
+        counted.handle(datagram(payload: query))
+        check(counted.takeDomains().isEmpty)                                                                // nothing is counted until it is switched on
+        counted.setDomainCounting(true)
+        counted.handle(datagram(payload: query)); counted.handle(datagram(payload: query))
+        let taken = counted.takeDomains()
+        check(taken.count == 1 && taken[0].n == "example.com" && taken[0].b == 2 && taken[0].a == 0)      // two blocked lookups, by name, no times
+        check(counted.takeDomains().isEmpty)                                                                // a take empties the tally
+        counted.handle(datagram(payload: query)); counted.setDomainCounting(false)
+        check(counted.takeDomains().isEmpty)                                                                // switching off discards what was counted
+        counted.setDomainCounting(true)
+        for i in 0..<(DNSOnlyRuntime.maximumDomains + 30) { counted.noteDomainForTest("n\(i).test", blocked: i % 2 == 0) }
+        let big = counted.takeDomains()
+        check(big.count == DNSOnlyRuntime.maximumTaken + 1 && big.last?.n == "")                           // the most active are kept, the rest sit under "other"
+        check(big.reduce(0) { $0 + Int($1.a) + Int($1.b) } == DNSOnlyRuntime.maximumDomains + 30)         // and no lookup is lost from the total
+        check(TunnelDiagnosticRequest.domainsRequest(TunnelDiagnosticRequest.domains(on: true))?.on == true && TunnelDiagnosticRequest.domainsRequest(TunnelDiagnosticRequest.domains(on: false))?.on == false)
+        check(TunnelDiagnosticRequest.domainsRequest(TunnelDiagnosticRequest.domainsTake)?.take == true && TunnelDiagnosticRequest.domainsRequest(TunnelDiagnosticRequest.statistics) == nil)
 
         // LocalDNSProbe against a local UDP responder: a blocked name must read as NXDOMAIN, a normal name as a real answer.
         let answerQueue = DispatchQueue(label: "test.udp")
@@ -245,6 +292,51 @@ import Network
         var bothFailed = false
         do { _ = try await FallbackUpstream(primary: dead, backup: Stub(nil)).exchange(Data()) } catch { bothFailed = true }
         check(bothFailed)
+        // Rebinding protection end to end: a public name answered with a router address comes back as "does not exist"; switched off, it passes
+        func rebindQuery(_ name: String) -> [UInt8] { [0x55, 0x66, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0] + labels(name) + [0, 1, 0, 1] }
+        func run(rebinding: Bool, name: String, ip: [UInt8]) async -> (reply: [UInt8]?, counters: DNSOnlyCounters) {
+            let lock = NSLock(); var out: [Data] = []
+            let reply = aReply(name, ip); var fixed = [UInt8](reply); fixed[0] = 0x55; fixed[1] = 0x66
+            let runtime = DNSOnlyRuntime(upstream: Stub(Data(fixed)), rebinding: rebinding) { packet in lock.lock(); out.append(packet); lock.unlock() }
+            runtime.handle(datagram(payload: rebindQuery(name)))
+            for _ in 0..<40 { lock.lock(); let n = out.count; lock.unlock(); if n > 0 { break }; try? await Task.sleep(for: .milliseconds(50)) }
+            lock.lock(); let first = out.first; lock.unlock()
+            return (first.map { [UInt8]($0.dropFirst(28)) }, runtime.snapshot)
+        }
+        let guarded = await run(rebinding: true, name: "evil.example.com", ip: [192, 168, 1, 1])
+        check(guarded.reply != nil && guarded.reply![3] & 0x0f == 3 && guarded.reply![7] == 0)      // NXDOMAIN, no answers
+        check(guarded.counters.rebinding == 1 && guarded.counters.blocked == 1 && guarded.counters.answered == 0)
+        let unguarded = await run(rebinding: false, name: "evil.example.com", ip: [192, 168, 1, 1])
+        check(unguarded.reply != nil && unguarded.reply![3] & 0x0f == 0 && unguarded.reply![7] == 1 && unguarded.counters.rebinding == 0)
+        let normal = await run(rebinding: true, name: "example.com", ip: [93, 184, 216, 34])
+        check(normal.reply != nil && normal.reply![7] == 1 && normal.counters.rebinding == 0 && normal.counters.answered == 1)
+        // An allow rule for that exact name wins over rebinding protection
+        do {
+            let lock = NSLock(); var out: [Data] = []
+            var allow = DNSRuleSnapshot(); allow.allowExact = [DNSRuleSnapshot.hash("evil.example.com")]
+            var fixed = [UInt8](aReply("evil.example.com", [192, 168, 1, 1])); fixed[0] = 0x55; fixed[1] = 0x66
+            let rt = DNSOnlyRuntime(upstream: Stub(Data(fixed)), rules: allow, rebinding: true) { packet in lock.lock(); out.append(packet); lock.unlock() }
+            rt.handle(datagram(payload: rebindQuery("evil.example.com")))
+            for _ in 0..<40 { lock.lock(); let n = out.count; lock.unlock(); if n > 0 { break }; try? await Task.sleep(for: .milliseconds(50)) }
+            lock.lock(); let reply = out.first.map { [UInt8]($0.dropFirst(28)) }; lock.unlock()
+            check(reply != nil && reply![7] == 1 && rt.snapshot.rebinding == 0)
+        }
+        let localName = await run(rebinding: true, name: "nas.local", ip: [192, 168, 1, 20])
+        check(localName.reply != nil && localName.reply![7] == 1 && localName.counters.rebinding == 0)
+        // An older secret carries no setting: it decodes as nil, which the tunnel reads as on.
+        check(try JSONDecoder().decode(TunnelSecret.self, from: Data("{\"wireguard\":\"\",\"resolver\":\"tls://dns.example\",\"mode\":\"vpnFirst\"}".utf8)).rebindingProtection == nil)
+        // Resolver statistics: absent from older tunnels, carried when present, and the backup never speaks for the main resolver
+        check(try JSONDecoder().decode(DNSOnlyCounters.self, from: Data("{\"queries\":5}".utf8)).upstream == nil)
+        let wire = try JSONDecoder().decode(DNSOnlyCounters.self, from: Data("{\"queries\":5,\"upstream\":{\"answered\":9,\"timeouts\":2,\"errors\":1,\"cacheHits\":4,\"rtt\":[1,2,3,0,0,0,0,0],\"generation\":3,\"windowStart\":1700000000}}".utf8))
+        check(wire.upstream?.answered == 9 && wire.upstream?.timeouts == 2 && wire.upstream?.rtt.count == 8 && wire.upstream?.generation == 3)
+        final class Spoke: DNSUpstreaming, @unchecked Sendable {
+            let wire: ResolverWire?; init(_ w: ResolverWire?) { wire = w }
+            func exchange(_ query: Data) async throws -> Data { query }
+            func statistics() -> ResolverWire? { wire }
+        }
+        check(FallbackUpstream(primary: Spoke(ResolverWire(answered: 7)), backup: Spoke(ResolverWire(answered: 99))).statistics()?.answered == 7)
+        check(Stub(nil).statistics() == nil)
+        check(DNSOnlyRuntime(upstream: Spoke(ResolverWire(answered: 3)), rebinding: true) { _ in }.snapshot.upstream?.answered == 3)
         // Tunnel health verdicts
         var wg = TunnelStats(); wg.received = 5_000; wg.sent = 2_000; wg.latestHandshake = Date().addingTimeInterval(-30)
         check(TunnelHealth.assess(running: false, connected: false, kind: "WireGuard", stats: nil, statsAge: nil, uptime: nil).verdict == .off)

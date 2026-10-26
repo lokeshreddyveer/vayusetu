@@ -118,6 +118,23 @@ enum DNSPacketCodec {
         }
         return targets
     }
+    /// The addresses (A and AAAA records) in a reply's answer section, as raw bytes (4 or 16 each).
+    static func addresses(of reply: Data) -> [[UInt8]] {
+        let b = [UInt8](reply)
+        guard b.count >= 12, b[2] & 0x80 != 0 else { return [] }
+        let questions = Int(b[4]) << 8 | Int(b[5]), answers = Int(b[6]) << 8 | Int(b[7])
+        var offset = 12
+        for _ in 0..<questions { guard let n = name(in: b, at: offset), n.next + 4 <= b.count else { return [] }; offset = n.next + 4 }
+        var found: [[UInt8]] = []
+        for _ in 0..<answers {
+            guard let n = name(in: b, at: offset), n.next + 10 <= b.count else { return found }
+            let type = Int(b[n.next]) << 8 | Int(b[n.next + 1]), length = Int(b[n.next + 8]) << 8 | Int(b[n.next + 9]), data = n.next + 10
+            guard data + length <= b.count else { return found }
+            if (type == 1 && length == 4) || (type == 28 && length == 16) { found.append(Array(b[data..<(data + length)])) }
+            offset = data + length
+        }
+        return found
+    }
     /// Name-level block: NXDOMAIN for every record type, echoing the question (RFC 1035). Apps treat this as "does not exist".
     static func blockedResponse(for query: Data, questionEnd: Int) -> Data? {
         guard query.count >= questionEnd, questionEnd > 12 else { return nil }
@@ -266,7 +283,12 @@ private final class TLSExchange: @unchecked Sendable {
 }
 
 /// Anything that can answer one DNS message over an encrypted transport. Failure means SERVFAIL, never plaintext.
-protocol DNSUpstreaming: AnyObject, Sendable { func exchange(_ query: Data) async throws -> Data }
+protocol DNSUpstreaming: AnyObject, Sendable {
+    func exchange(_ query: Data) async throws -> Data
+    /// What the resolver behind this has done, when it can say (the Go client can).
+    func statistics() -> ResolverWire?
+}
+extension DNSUpstreaming { func statistics() -> ResolverWire? { nil } }
 
 /// Swift/Network.framework client: DoT, and DoH over HTTP/1.1 only. Kept for host tests; the extension uses the Go client
 /// (HTTP/2, connection reuse), because some resolvers (Quad9) reject HTTP/1.1.
@@ -303,6 +325,8 @@ final class FallbackUpstream: DNSUpstreaming, @unchecked Sendable {
         catch is CancellationError { throw CancellationError() }
         catch { return try await backup.exchange(query) }
     }
+    /// The main resolver's figures: the backup is only a stand-in, and its answers say nothing about whether the main one is healthy.
+    func statistics() -> ResolverWire? { primary.statistics() }
 }
 
 /// Receives raw packets from the tunnel, answers DNS queries and writes reply packets back.
@@ -316,18 +340,45 @@ final class DNSOnlyRuntime: @unchecked Sendable {
     private var counters = DNSOnlyCounters()
     private var rules: DNSRuleSnapshot?
     private var logging = false
+    /// DNS rebinding protection (see DNSRebinding). On unless the secret says otherwise.
+    private let rebinding: Bool
+    private var domainsOn = false
+    private var domainTally: [String: (allowed: UInt32, blocked: UInt32)] = [:]
+    private var domainOther: (allowed: UInt32, blocked: UInt32) = (0, 0)
+    static let maximumDomains = 4000, maximumTaken = 600
     private var queryLog: [DNSQueryEntry] = []
     private var nextLogID: UInt64 = 1
     static let maximumLogged = 400
     /// `rules == nil` means filtering is off for this provider; an empty snapshot means it is on with nothing loaded.
-    init(upstream: any DNSUpstreaming, rules: DNSRuleSnapshot? = nil, write: @escaping (Data) -> Void) { self.upstream = upstream; self.rules = rules; self.write = write; counters.rules = UInt64(rules?.count ?? 0) }
-    var snapshot: DNSOnlyCounters { lock.lock(); defer { lock.unlock() }; return counters }
+    init(upstream: any DNSUpstreaming, rules: DNSRuleSnapshot? = nil, rebinding: Bool = true, write: @escaping (Data) -> Void) { self.upstream = upstream; self.rules = rules; self.rebinding = rebinding; self.write = write; counters.rules = UInt64(rules?.count ?? 0) }
+    var snapshot: DNSOnlyCounters { lock.lock(); var c = counters; lock.unlock(); c.upstream = upstream.statistics(); return c }
     func stop() { lock.lock(); stopped = true; lock.unlock() }
     /// The lookup list lives in memory only; switching it off discards it.
     func setLogging(_ on: Bool) { lock.lock(); logging = on; if !on { queryLog.removeAll() }; lock.unlock() }
+    /// The per-domain history: counts only, no times, emptied by every take. Switching it off discards what was counted.
+    func setDomainCounting(_ on: Bool) { lock.lock(); domainsOn = on; if !on { domainTally = [:]; domainOther = (0, 0) }; lock.unlock() }
+    /// Call with the lock held.
+    private func tallyDomain(_ rawName: String, blocked: Bool) {
+        var name = rawName.lowercased(); if name.hasSuffix(".") { name.removeLast() }
+        guard !name.isEmpty else { return }
+        if var entry = domainTally[name] { if blocked { entry.blocked &+= 1 } else { entry.allowed &+= 1 }; domainTally[name] = entry }
+        else if domainTally.count < Self.maximumDomains { domainTally[name] = blocked ? (0, 1) : (1, 0) }
+        else if blocked { domainOther.blocked &+= 1 } else { domainOther.allowed &+= 1 }
+    }
+    /// Counts one lookup as the real path does, for tests that need many distinct names.
+    func noteDomainForTest(_ name: String, blocked: Bool) { lock.lock(); tallyDomain(name, blocked: blocked); lock.unlock() }
+    func takeDomains() -> [DomainCount] {
+        lock.lock(); let counts = domainTally; var other = domainOther; domainTally = [:]; domainOther = (0, 0); lock.unlock()
+        var sorted = counts.map { DomainCount(n: $0.key, a: $0.value.allowed, b: $0.value.blocked) }
+            .sorted { ($0.a + $0.b, $1.n) > ($1.a + $1.b, $0.n) }
+        if sorted.count > Self.maximumTaken { for c in sorted[Self.maximumTaken...] { other.allowed &+= c.a; other.blocked &+= c.b }; sorted.removeSubrange(Self.maximumTaken...) }
+        if other.allowed > 0 || other.blocked > 0 { sorted.append(DomainCount(n: "", a: other.allowed, b: other.blocked)) }
+        return sorted
+    }
     func recentQueries(after id: UInt64) -> [DNSQueryEntry] { lock.lock(); defer { lock.unlock() }; return queryLog.filter { $0.id > id } }
     /// Call with the lock held.
     private func note(_ name: String, _ type: UInt16, _ result: String) {
+        if domainsOn, result != "failed" { tallyDomain(name, blocked: result == "blocked") }
         guard logging else { return }
         let label: String
         switch type { case 1: label = "A"; case 28: label = "AAAA"; case 5: label = "CNAME"; case 15: label = "MX"; case 16: label = "TXT"; case 65: label = "HTTPS"; case 12: label = "PTR"; default: label = "\(type)" }
@@ -361,6 +412,15 @@ final class DNSOnlyRuntime: @unchecked Sendable {
                 if finishBlocked(), let packet = DNSPacketCodec.response(for: query, payload: blockedReply) { write(packet) }
                 return
             }
+            // A public name answered with a home-network address is replaced by "does not exist".
+            // An explicit allow rule for the asked name wins, so a person can exempt a name that points inward on purpose.
+            lock.lock(); let ruleSnapshot = rules; lock.unlock()
+            if ok, rebinding, let answer, let asked, ruleSnapshot?.decide(asked.name) != .allow, DNSRebinding.shouldBlock(name: asked.name, reply: answer),
+               let blockedReply = DNSPacketCodec.blockedResponse(for: query.payload, questionEnd: asked.end) {
+                lock.lock(); counters.rebinding += 1; note(asked.name, asked.type, "blocked"); lock.unlock()
+                if finishBlocked(), let packet = DNSPacketCodec.response(for: query, payload: blockedReply) { write(packet) }
+                return
+            }
             // A query counts as answered only after a validated upstream reply exists.
             if let asked { lock.lock(); note(asked.name, asked.type, ok ? "answered" : "failed"); lock.unlock() }
             guard complete(answered: ok), let answer else { return }
@@ -389,5 +449,44 @@ final class DNSOnlyRuntime: @unchecked Sendable {
         inFlight -= 1
         if answered { counters.answered += 1 } else { counters.failed += 1 }
         return !stopped
+    }
+}
+
+
+/// DNS rebinding protection. A public name that answers with an address inside the home network (192.168.x.x, 10.x.x.x, loopback and so on) is how a
+/// web page can reach into the router or a device in the house, so such an answer is replaced by "does not exist". Names that legitimately point
+/// inward are left alone: local-network suffixes, and a few well-known services that publish private addresses on purpose.
+/// Not treated as rebinding: 0.0.0.0 and :: (that is how filtering resolvers say "blocked"), and 100.64.0.0/10 (carrier-grade NAT and overlay VPN names).
+enum DNSRebinding {
+    static let exemptSuffixes = ["local", "lan", "home", "home.arpa", "internal", "localdomain", "localhost", "intranet", "corp", "plex.direct", "ts.net", "in-addr.arpa", "ip6.arpa"]
+
+    static func isExempt(_ name: String) -> Bool {
+        var n = name.lowercased(); if n.hasSuffix(".") { n.removeLast() }
+        guard !n.isEmpty else { return true }
+        if !n.contains(".") { return true }            // a single label ("printer") is a local name, never a public one
+        return exemptSuffixes.contains { n == $0 || n.hasSuffix("." + $0) }
+    }
+    static func isPrivate(_ a: [UInt8]) -> Bool {
+        if a.count == 4 {
+            if a.allSatisfy({ $0 == 0 }) { return false }
+            switch (a[0], a[1]) {
+            case (10, _), (127, _), (169, 254), (192, 168): return true
+            case (172, 16...31): return true
+            default: return false
+            }
+        }
+        if a.count == 16 {
+            if a.allSatisfy({ $0 == 0 }) { return false }
+            if a[0..<15].allSatisfy({ $0 == 0 }) && a[15] == 1 { return true }       // ::1
+            if a[0] & 0xfe == 0xfc { return true }                                    // fc00::/7
+            if a[0] == 0xfe && a[1] & 0xc0 == 0x80 { return true }                    // fe80::/10
+            if a[0..<10].allSatisfy({ $0 == 0 }) && a[10] == 0xff && a[11] == 0xff { return isPrivate(Array(a[12..<16])) }   // ::ffff:a.b.c.d
+        }
+        return false
+    }
+    /// Whether this reply to `name` should be replaced.
+    static func shouldBlock(name: String, reply: Data) -> Bool {
+        guard !isExempt(name) else { return false }
+        return DNSPacketCodec.addresses(of: reply).contains { isPrivate($0) }
     }
 }
