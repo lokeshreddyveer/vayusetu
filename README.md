@@ -198,23 +198,49 @@ Permissions, protection modes, Privacy Lock, connect on launch and automatic rec
 
 ### VayuSetu for Mac
 
-The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock, Network, Security Center and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
+The Mac app is designed for the desktop, not stretched from the phone. A sidebar leads to **Home, VPN Profiles, Encrypted DNS, Adblock, Network, Connection Health, Security Center and Settings**, and each page is a wide two-column layout with panels, tables, menus, hover states and right-click actions. It uses exactly the same engine as the iPhone app: the same profiles, the same DNS filter, the same Checks.
 
-- **Home:** the power button and the three protections on the left; connection, live traffic, DNS activity and status on the right.
+- **Home:** the power button and the three protections, a live picture of **your route** (direct, DNS only, VPN, or both), the **Internet speed** panel with a speed test and the best measured speed in each mode **on the current network** (each result is tied to the network, VPN profile and server it was measured on, with its date; speeds from another network are never shown as this one, and a network that cannot be identified keeps none), and connection and traffic totals. DNS activity lives on the Encrypted DNS page; Home shows only today's count.
 - **VPN Profiles:** a list with a details pane, connect, edit, duplicate, export without secrets, and QR export.
-- **Encrypted DNS:** resolvers, a test, DNS activity, and an optional **Recent lookups** list (see below).
+- **Encrypted DNS:** resolvers (any of them can be deleted, except the one in use), a test, a **live view of lookups** being blocked or let through, DNS activity for the last hour, day, week, year or a range you choose, and two optional lists: **Recent lookups** and a **domain history** with the most blocked and most allowed domains (kept only on this Mac, counts per day, no times or apps).
 - **Adblock:** the six Safari extensions with their on/off state, whether Safari has loaded the rules, and how many of Safari's 150,000 rules each one uses.
-- **Menu bar:** switches for VPN, Encrypted DNS and Adblock, a power item, and the network filter at a glance: allowed and blocked in the last minute, the latest blocks, connections waiting for you, and quick switches for the filter's mode and profile.
+- **Menu bar:** switches for VPN, Encrypted DNS and Adblock (each one sets exactly the value you chose; a switch never flips what is already running), a power item, and the network filter at a glance: allowed and blocked in the last minute, the latest blocks, connections waiting for you, and quick switches for the filter's mode and profile.
 - **Keyboard:** ⇧⌘P turns protection on or off, ⇧⌘M opens the mode chooser.
 - **One window.** Links, the menu bar's *Open VayuSetu* and the Dock all bring back the same window; VayuSetu never opens a second copy.
 - **System extensions:** the WireGuard tunnel and the network filter run as macOS system extensions, signed and notarized by Apple.
-- **Network:** a firewall-style page that shows which apps connect where and lets you decide. It has its own section below.
+- **Network:** a firewall-style page that shows which apps connect where and lets you decide, with a live view of connections passing or being stopped. It has its own section below.
+- **Connection Health:** how your connection is doing and why it stalls, in six sections: Overview, Wi-Fi, Internet, Local network, Lab and History. See the section below.
 
 The screenshot shows the Adblock page before Safari protection is switched on.
 
 </td>
 </tr>
 </table>
+
+## Connection Health (Mac)
+
+Connection Health answers "why is my internet not working properly, and what part is responsible?" It works with the VPN, DNS and ad blocking all off, and it is off until you switch **Watch my connection** on.
+
+| Section | What it does |
+|---|---|
+| **Overview** | A health score, how you are connected (Wi-Fi, Ethernet, a tunnel, a hotspot), signal, router latency and loss, a latency chart, and short notes (a hotspot, a network slower than usual, a changed router) |
+| **Wi-Fi** | Signal, noise, band, channel, width, standard, link rate and security; a signal chart; a nearby-network scan with channel advice; access-point changes; **Restart Wi-Fi**, which asks first and records what happened |
+| **Internet** | Sign-in page check, public address, IPv6, name servers compared, website timing, a VPN leak check, and an advisor for Wi-Fi security, proxies and DNS leaks |
+| **Local network** | Every connection on the Mac (Wi-Fi, Ethernet, USB and Thunderbolt adapters, tunnels) with link speed and counters, a latency comparison between connections, the router's DHCP lease, and devices advertising services (printers, speakers) |
+| **Lab** | Traceroute, path packet size, latency under load (bufferbloat), and a single-port check |
+| **History** | An internet quality report you can copy for your provider (with the scheduled checks and the period they cover), 30 days of daily quality, stalls with their likely cause, what each part of VayuSetu saw and how sure it is, and a timeline of changes |
+
+The Overview also lists **what is working**, judged separately for the Wi-Fi and router, the internet, DNS and the VPN, so a resolver outage is not reported as poor Wi-Fi and a dead router is one problem, not three. Each line says whether it was measured, and with no tunnel resolver figures it says "Tunnel resolver health unavailable" before falling back to the app's own DNS check.
+
+**Stalls share one record.** When a stall happens, the Wi-Fi monitor, the tunnel's DNS resolver, the VPN, the Mac's wake and path changes and any speed test that finished meanwhile add what they saw to the same stall, each with when it was measured, on which connection and in which VPN session. Evidence from another network or an older tunnel session is refused. Each item is labelled *Confirmed observation*, *Correlated*, *Probable consequence*, *Independent failure* or *Inconclusive*: order in time is never called a cause. A VPN reconnecting during a Wi-Fi outage adds a tunnel session to the stall and does not end it. A very long outage is recorded in parts that share one parent. Optionally (Settings, off by default) the few names looked up in the minute before a stall are listed beside it; they are kept in memory for ten minutes and are never part of a report.
+
+How it stays honest:
+
+- **Every figure says where it came from:** measured, inferred, or not available. Anything macOS does not report shows as unavailable, never as zero.
+- **A stall needs repeated evidence.** It is recorded only after three router checks fail, and a single slow reply is never called a fault. A diagnosis always lists what was seen, and with too little data its confidence is capped at low.
+- **It is light.** About 1 KB a minute, slower on a hotspot, in Low Power Mode, on battery, or when steady. Each tool can be cancelled, and the heavy ones are off on a connection that costs data.
+- **Nothing leaves the Mac.** There is no account and no telemetry. The checks contact Cloudflare, Apple or Google only when you press them, except the monitor's pings to Cloudflare's 1.1.1.1, which its switch states.
+- **Nothing is changed by itself.** Restart Wi-Fi is the only action, and it asks first.
 
 ## The Mac network filter in depth
 
@@ -244,6 +270,7 @@ The same order every time, so the outcome is predictable:
 | Mode | What it does with a connection no rule covers |
 |---|---|
 | **Ask me** | Pauses the connection and shows the connection card. Nothing is lost: it stays paused until you answer. You can instead let a timeout apply your default, for unattended Macs. |
+| **When VayuSetu cannot ask you** (Ask me) | If VayuSetu is closed, has not opened yet after you sign in, or has lost its link to the filter, nobody can be asked, so a connection that no rule covers follows a setting you choose: **Allow, and list it** (the default, so nothing stops working) or **Block, and list it**. Either way each connection is listed with the reason, counted, and reported on the Network page for a week. Your rules, block lists and trusted Apple software still decide first. Choosing Block means some apps fail to connect until VayuSetu is open, for example just after you sign in. |
 | **Passive** | Never asks. Your rules and lists still apply, and new connections are allowed or blocked as you chose, optionally saving that choice as a rule for the app so the list builds itself. |
 | **Block all** | Everything is blocked except what a rule or an allow list lets through. |
 
@@ -291,17 +318,35 @@ If the Mac app ever crashes, it writes a short trace of function names (no perso
 
 On the Encrypted DNS page (and on the iPhone's DNS diagnostics) you can switch on **Keep a list of recent lookups**: the last few hundred names this device asked for, whether each was blocked, answered or failed, with search. It is **off by default**, held in the tunnel's memory only, never saved, and cleared when you switch it off. It works with the local DNS tunnel. DNS does not say which app asked, so this list cannot show that; the network filter is where you see apps.
 
+## Intelligence and protection extras (Mac)
+
+| Feature | What it does | Default |
+|---|---|---|
+| **Block answers that point inside your network** (Settings) | A public website name that answers with a home-network address (192.168.x.x, 10.x.x.x and so on) is how a web page can reach your router, so the answer is replaced by "does not exist". Names ending in .local or .lan, Plex and Tailscale names, and anything you explicitly allow are left alone. Works wherever VayuSetu's own DNS runtime is in the path: DNS-only mode with any resolver, and a VPN with VayuSetu DNS. It does not apply to a VPN that uses an external resolver such as Control D, where that resolver's own policy governs. | On |
+| **Tell me if something changes my DNS** (Settings) | While protection is on, checks every 30 seconds that nothing else has taken over this Mac's DNS or routing (another VPN, a profile). It says which interface, never an address, and needs the same result twice before it alerts. It reports only; it never undoes another app's change. | On |
+| **Ask me about open Wi-Fi** (Settings) | Joining a network with no password while nothing protects you shows a card on Home: turn on VPN + DNS, not now, or never for this network. A general Wi-Fi rule ("any open network", "any other network") now also only asks; only a rule you wrote for that exact network acts by itself. An empty rule list authorizes nothing. | On |
+| **Kill switch status** (Home, Connection) | Shows whether strict routing is off, ready, on, holding traffic while the VPN reconnects, or set up without capturing all traffic. macOS enforces it; VayuSetu does not test it, because a real test would cut your connection, and says so. | Strict routing on |
+| **Check that answers are genuine** (Encrypted DNS) | Asks your resolver for three names whose addresses never change and compares. A name your resolver blocks on purpose is called filtering, not tampering; a captive portal can also cause a mismatch. Manual. | Manual |
+| **Apps with their own DNS** (Security Center) | Lists apps that appear to use their own encrypted DNS (DNS-over-TLS or a known DNS-over-HTTPS service), so VayuSetu's lists do not see their lookups. A likely sign, not proof; it can point it out but cannot block it. | Always on with the network filter |
+| **What is new** (Security Center) | Which apps connected, and to which sites, for the first time today. It stores an app and a site per entry, no times; the first three days only learn; switching it off deletes it. A notification for a new app is separate and off. | Off |
+| **Blocked, by company** (Encrypted DNS, Domains) | Groups blocked domains by the company behind them, from a short hand-written table. A domain not in it simply has no company shown. | Shown with the domain history |
+| **Resolver suggestion** (Encrypted DNS) | If the resolver in use has really been failing (enough lookups, and the router and internet were fine), suggests another saved resolver that answered a test lookup, never one with weaker filtering or one that does not work through the VPN. It never switches anything. | Shown only when needed |
+| **Speed tests compared fairly** (Home) | Each result records its network, mode, server, method and connection count, and is judged only against earlier tests under the same conditions. Older results are shown without a comparison. | Always |
+
 ## Controlling VayuSetu from scripts and shortcuts
 
 On the Mac, links control the running app, from Terminal, Shortcuts or any script:
 
 ```sh
-open "vayusetu://protection/dns/on"          # vpn, dns or adblock; on, off or toggle
+open "vayusetu://protection/dns/on"          # vpn, dns or adblock; on, off or toggle (on and off are explicit values)
+open "vayusetu://protection/both/off"        # VPN and DNS off in one request; Adblock is left as it is
 open "vayusetu://network/profile/Work"       # apply a saved network-filter profile
 open "vayusetu://network/mode/passive"       # normal, passive or blockall
 ```
 
 On the iPhone, **Shortcuts** and **Siri** can turn DNS-only, VPN and ad blocking on and off.
+
+Every change to VPN, DNS or Adblock is written to the connection log with who asked for it (the Home switches, the menu bar, a link, a Shortcut, a Wi-Fi rule or the power button), what it changed, and how it ended. Asking for something that is already so changes nothing.
 
 ## Security Center and managed policy
 
@@ -329,8 +374,11 @@ VayuSetu has no accounts, no analytics and no tracking, and it runs no servers. 
 | You connect | The VPN server and the DNS resolver you configured |
 | Filter lists update | The list sources you enabled |
 | You run a public-IP check | An IP-echo service such as ipify or ident.me |
-| You run the speed test | Cloudflare's public speed servers (about 70 MB of data) |
+| You run the speed test | Apple's or Cloudflare's public speed servers (up to about 600 MB down and 300 MB up on a fast line) |
+| You switch on Watch my connection | Your router, and Cloudflare's 1.1.1.1 (one tiny packet every few seconds), plus a name lookup through your normal resolver |
+| You use the Connection Health tools | The server you pressed a button for: Apple's connectivity page, an IP-echo service, Cloudflare and Google's DNS, or the sites you checked |
 | You look up who owns an address (optional, asks first) | RIPEstat |
+| You press Check now under "Check that answers are genuine" | Your own resolver, asked for three well-known names (Cloudflare, Google and Quad9 each publish their own) |
 | You run the adblock test | The ad and tracker hosts it tests, to see whether they are blocked |
 
 Credentials live in the Keychain. Connection logs and traffic history are optional, stay on the device, and can be cleared at any time. Backups are encrypted with a password you choose. Read the full [privacy policy](https://lokeshreddyveer.github.io/vayusetu/privacy.html).
@@ -347,6 +395,10 @@ Credentials live in the Keychain. Connection logs and traffic history are option
 - **Country locations are estimates.** They come from an address database inside the app (IP Geolocation by DB-IP, CC BY 4.0), and a country's centre is not a server's place.
 - **Other network tools can interfere.** If AdGuard, LuLu, another VPN or another content filter runs at the same time, DNS and connection filtering can be affected. Checks tells you what VayuSetu saw.
 - **The recent-lookups list cannot name the app** that asked, because DNS does not carry that.
+- **Connection Health cannot raise your Wi-Fi signal or speed.** It finds what is wrong and says what to change. Only the router can set channel, power or priority, and VayuSetu does not log in to routers.
+- **The iPhone does not get Wi-Fi signal data.** Apple does not allow it. The iPhone app has the connection-quality and public-address checks.
+- **Cellular radio details** (signal in dBm, tower, band) are not available to any third-party app.
+- **A nearby-network scan is a snapshot,** not a spectrum analysis, and macOS may ask for Location permission before it shows anything.
 - **OpenVPN** is not supported. **Certificate-based IKEv2** is not yet available on the Mac. The Mac app has no QR-code scanner, widgets or Shortcuts actions; it has the `vayusetu://` links above instead.
 - **Not independently audited.** The code is published for review, but VayuSetu has not had a third-party security audit, and the tunnel has not yet been validated against every network transition.
 
@@ -356,7 +408,7 @@ Credentials live in the Keychain. Connection logs and traffic history are option
 
 **Does VayuSetu see my browsing?** No. It has no servers. DNS lookups go from your device to the resolver you chose, and the filter runs on your device.
 
-**Why does the status say "not verified"?** Because VayuSetu will not say a protection works until it has seen evidence. Run the checks, or use the connection for a moment, and it updates.
+**Why does the status say "not verified"?** Because VayuSetu will not say a protection works until it has seen evidence. Run the checks, or use the connection for a moment, and it updates. With a VPN and an external encrypted resolver (Control D, Quad9 and the like) there is no VayuSetu filter to ask, so VayuSetu checks that the system accepted that resolver and that names resolve the way apps resolve them. It then says one of four things: *verified*, *failed*, *cannot be checked for this setup* (the system has not confirmed it applied your resolver, which is not a failure), or *not checked yet*. Filtering in that mode is the resolver's own; VayuSetu's lists apply only with VayuSetu DNS.
 
 **Will blocking break websites?** Sometimes, especially in Strict mode. Use **Website Exceptions** to turn blocking off for one site.
 
