@@ -8,7 +8,12 @@ struct MacSettings: View {
     @ObservedObject var store: AppStore
     @ObservedObject var tunnel: TunnelController
     @ObservedObject var preferences: DesktopPreferences
+    @ObservedObject var wifi: WiFiWatcher
     @AppStorage("appearance") private var appearance = "dark"
+    @AppStorage("animated-scenes") private var animatedScenes = true
+    @AppStorage("rebinding-protection") private var rebindingProtection = true
+    @AppStorage("tamper-alerts") private var tamperAlerts = true
+    @AppStorage("stall-domains") private var stallDomains = false
     @StateObject private var checksNetwork = NetworkDiagnostics()
     @State private var removing = false
     private var locked: Bool { tunnel.running || tunnel.busy || store.connectionOperation }
@@ -17,9 +22,16 @@ struct MacSettings: View {
 
     var body: some View {
         MacPage(title: "Settings", subtitle: "Protection, startup, notifications and diagnostics.") {
-            HStack(alignment: .top, spacing: 20) {
-                VStack(spacing: 20) { protection; startup; notifications; appearanceBox }.frame(maxWidth: .infinity)
-                VStack(spacing: 20) { diagnostics; data; advanced; about }.frame(maxWidth: .infinity)
+            MacPanelLayout(minimumColumnWidth: 440) {
+                protection
+                MacWiFiRules(watcher: wifi)
+                diagnostics
+                startup
+                notifications
+                appearanceBox
+                data
+                advanced
+                about
             }
         }
         .vsConfirm(isPresented: $removing, title: "Remove the saved VPN configuration?", message: "Your imported profiles and keys remain available.", confirm: "Remove", destructive: true, icon: "trash.fill") { Task { do { try await tunnel.removeConfiguration() } catch { store.notice = error.localizedDescription } } }
@@ -35,6 +47,12 @@ struct MacSettings: View {
                 link("Routing & connection rules", "Strict routing, local network, app reconnect", icon: "lock.shield") { VSPrivacyLockScreen(store: store, tunnel: tunnel) }
                 Divider()
                 switchRow("Connect on launch", "Starts protection when VayuSetu opens.", icon: "bolt", isOn: $store.connectOnLaunch)
+                Divider()
+                switchRow("Block answers that point inside your network", "A public website name that answers with an address in your home network (192.168.x.x, 10.x.x.x) is how a web page can reach your router. Names ending in .local or .lan, and services such as Plex, are left alone. Applies on the next connection.", icon: "shield.lefthalf.filled.badge.checkmark", isOn: $rebindingProtection)
+                Divider()
+                switchRow("Tell me if something changes my DNS", "While protection is on, VayuSetu checks every 30 seconds that nothing else has taken over this Mac's DNS or routing, such as another VPN or a profile. It only reports; it never undoes another app's change.", icon: "exclamationmark.shield", isOn: $tamperAlerts)
+                Divider()
+                switchRow("Show names looked up before a stall", "When a stall is recorded, also list the few names the DNS tunnel was handling in the minute before it. They are kept in memory for ten minutes, stay on this Mac, are saved only with that stall, and are left out of every shared report. Needs DNS filtering on.", icon: "globe.badge.chevron.backward", isOn: Binding(get: { stallDomains }, set: { stallDomains = $0; WiFiMonitor.shared.setStallDomains($0) }))
                 Divider()
                 switchRow("Automatic reconnect", "Reconnects if the tunnel drops.", icon: "arrow.clockwise", isOn: Binding(get: { tunnel.autoReconnect }, set: { tunnel.autoReconnect = $0; UserDefaults.standard.set($0, forKey: "auto-reconnect") }))
                 Text("Strict routing applies while connected. System on-demand is unavailable for this WireGuard build; the app can reconnect while running. Changes apply on the next connection, and leak protection still needs independent verification.").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -65,6 +83,8 @@ struct MacSettings: View {
                     Picker("", selection: $appearance) { Text("Dark").tag("dark"); Text("Light").tag("light"); Text("System").tag("system") }.labelsHidden().pickerStyle(.segmented).frame(width: 220)
                 }
                 Divider()
+                switchRow("Animated scenes", "The live pictures of your route, lookups and connections. Pause them to save power; they also stop by themselves when this window is behind another, and when Reduce Motion is on.", icon: "film", isOn: $animatedScenes)
+                Divider()
                 link("Appearance & accessibility", "Text size, contrast and motion", icon: "accessibility") { VSAppearanceScreen() }
             }
         }
@@ -78,7 +98,7 @@ struct MacSettings: View {
                 Divider()
                 link("Traffic & sessions", "Totals and history per profile", icon: "arrow.up.arrow.down") { VSTrafficScreen(store: store, tunnel: tunnel) }
                 Divider()
-                link("Privacy activity", "Blocks and requests observed", icon: "clock") { VSActivityScreen(filtering: store.filtering, tunnel: tunnel) }
+                link("Local event history", "VPN, DNS, Safari and filter events: export or clear", icon: "clock") { VSActivityScreen(filtering: store.filtering, tunnel: tunnel) }
                 Divider()
                 link("Compatibility", "What each connection can do, and conflicts", icon: "exclamationmark.triangle") { VSConflictsScreen(store: store, tunnel: tunnel) }
                 Divider()
@@ -98,7 +118,7 @@ struct MacSettings: View {
     private var advanced: some View {
         MacPanel("Advanced", icon: "gearshape.2") {
             VStack(spacing: 10) {
-                link("Security Center", "Egress checks, provider filters, hardening", icon: "lock.shield") { VSSecurityCenter(store: store, tunnel: tunnel) }
+                link("Egress checks and hardening", "Where traffic leaves, provider filters, hardening", icon: "lock.shield") { VSSecurityCenter(store: store, tunnel: tunnel) }
                 Divider()
                 link("Connection recovery", "Retries, timeouts, backup resolver and profile", icon: "arrow.clockwise") { VSCardList { VSSection { RetryPreferences(tunnel: tunnel, store: store) } }.vsList().vsHeader("Connection Recovery") }
                 Divider()

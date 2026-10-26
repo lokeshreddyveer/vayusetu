@@ -42,6 +42,33 @@ final class TestFlow: NEFilterFlow {
         let unattended = store("unattended", connected: false)
         _ = unattended.decide(NEFilterFlow(), info)
         check(unattended.pendingQuestions().isEmpty && unattended.recent(after: 0).last?.verdict == .allow)
+        // The unattended choice is explicit. Allow is the default and says so; Block stops the flow; both are listed with the reason and counted.
+        check(FilterSettings().unavailableAction == .allow)
+        check(unattended.recent(after: 0).last?.reason == "VayuSetu could not ask")
+        let unattendedAllowed = (try? JSONDecoder().decode(FilterUsage.self, from: JSONEncoder().encode(FilterUsage())))
+        check(unattendedAllowed != nil)
+        let closed = store("closed", connected: false)
+        var failClosed = FilterSettings(); failClosed.unavailableAction = .block
+        closed.setSettings(failClosed)
+        _ = closed.decide(NEFilterFlow(), info)
+        let blockedFlow = closed.recent(after: 0).last
+        check(blockedFlow?.verdict == .block && blockedFlow?.reason == "VayuSetu could not ask" && closed.pendingQuestions().isEmpty)
+        _ = closed.decide(NEFilterFlow(), info)
+        check(closed.currentUsage().unattendedBlocked == 2 && (closed.currentUsage().unattendedAllowed ?? 0) == 0 && closed.currentUsage().unattendedLast != nil)
+        check(unattended.currentUsage().unattendedAllowed == 1 && (unattended.currentUsage().unattendedBlocked ?? 0) == 0)
+        // Explicit rules and block lists still decide first, whichever way the unattended choice goes: the choice covers only what nothing else covers.
+        closed.setRules([NetRule(app: info.app, host: "*", port: "*", action: .allow)])
+        _ = closed.decide(NEFilterFlow(), info)
+        check(closed.recent(after: 0).last?.verdict == .allow && closed.recent(after: 0).last?.reason == nil && closed.currentUsage().unattendedBlocked == 2)
+        // An ordinary question is untouched when someone can answer, and settings saved before this existed read back as Allow.
+        let attended = store("attended", connected: true)
+        failClosed.unavailableAction = .block; attended.setSettings(failClosed)
+        _ = attended.decide(NEFilterFlow(), info)
+        check(attended.pendingQuestions().count == 1 && (attended.currentUsage().unattendedBlocked ?? 0) == 0)
+        let legacy = try JSONDecoder().decode(FilterSettings.self, from: Data("{\"askMode\":true}".utf8))
+        check(legacy.unavailableAction == .allow)
+        let legacyFlow = try JSONDecoder().decode(FlowRecord.self, from: Data("{\"id\":1,\"time\":0,\"app\":\"a\",\"appName\":\"A\",\"host\":\"h\",\"port\":\"1\",\"proto\":\"TCP\",\"outbound\":true,\"verdict\":\"allow\"}".utf8))
+        check(legacyFlow.reason == nil)
         // Switching approval off resolves all existing questions.
         var settings = FilterSettings(); settings.askMode = false
         spoof.setSettings(settings)
@@ -136,6 +163,25 @@ final class TestFlow: NEFilterFlow {
         check(sessioned.currentRules().count == 1)
         let afterRestart = store("sessioned"); afterRestart.load()
         check(afterRestart.currentRules().isEmpty)
+        // If the filter is stopped (or the app goes away), every paused connection is let through and nothing stays waiting.
+        let stopping = store("stopping")
+        for k in 0..<5 { var i = info; i.app = "app.\(k)"; _ = stopping.decide(TestFlow(), i) }
+        check(stopping.pendingQuestions().count == 5)
+        stopping.releaseAll()
+        check(stopping.pendingQuestions().isEmpty)
+        // The audit trail is written shortly after an event, off the decision path, and is complete once flushed.
+        let audited = store("audited")
+        audited.setRules([NetRule(app: "*", host: "example.com", port: "*", action: .block)]); audited.setSettings(FilterSettings())
+        audited.writeAudit()
+        let auditFile = base.appendingPathComponent("audited").appendingPathComponent("audit.json")
+        check((try? Data(contentsOf: auditFile)).map { $0.count > 10 } == true)
+        // Large rule sets are decided quickly (the old code took several milliseconds per connection with 5,000 rules).
+        let crowded = store("crowded")
+        crowded.setSettings({ var x = FilterSettings(); x.askMode = false; return x }())
+        crowded.setRules((0..<5000).map { NetRule(app: "*", host: $0 % 2 == 0 ? "t\($0).example" : "*.w\($0).example", port: "*", action: .block) })
+        let started = Date()
+        for k in 0..<2000 { var i = info; i.host = "h\(k).site.net"; _ = crowded.decide(TestFlow(), i) }
+        check(Date().timeIntervalSince(started) < 2.0)
         print("Filter provider checks passed: \(count)")
     }
 }

@@ -85,7 +85,8 @@ final class FilterStore {
         self.clientAvailable = clientAvailable
     }
     private let lock = NSLock()
-    private var rules: [NetRule] = []
+    private var rules: [NetRule] = [] { didSet { ruleIndex = NetRuleIndex(rules) } }
+    private var ruleIndex = NetRuleIndex()
     private var settings = FilterSettings()
     private var flows: [FlowRecord] = []
     private var nextID: Int64 = 1
@@ -123,7 +124,7 @@ final class FilterStore {
         if flows.isEmpty, let data = try? Data(contentsOf: historyURL), let old = try? JSONDecoder().decode([FlowRecord].self, from: data) {
             flows = Array(old.suffix(maximumFlows)); nextID = (flows.map(\.id).max() ?? 0) + 1
         }
-        if let data = try? Data(contentsOf: listsURL), let saved = try? JSONDecoder().decode([NetList].self, from: data) { lists = saved; index = NetListIndex(saved) }
+        if let data = try? Data(contentsOf: listsURL), let saved = try? JSONDecoder().decode([NetList].self, from: data) { index = NetListIndex(saved); lists = saved.map { var l = $0; l.entries = []; return l } }
         if let data = try? Data(contentsOf: usageURL), let saved = try? JSONDecoder().decode(FilterUsage.self, from: data) { usage = saved }
         if let data = try? Data(contentsOf: auditURL), let saved = try? JSONDecoder().decode([FilterAuditRecord].self, from: data) { audit = Array(saved.suffix(5000)) }
         if historyTimer == nil {
@@ -134,10 +135,28 @@ final class FilterStore {
         }
     }
     private func saveLocked() { if let data = try? JSONEncoder().encode(Saved(rules: rules, settings: settings, teams: teams)) { try? data.write(to: fileURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path) } }
+    private var auditDirty = false
+    private var auditWriteScheduled = false
+    private let auditQueue = DispatchQueue(label: "app.vayusetu.filter.audit", qos: .utility)
+    /// The audit trail is written a moment after the event, from a copy and off the connection path: encoding thousands of entries while
+    /// holding the lock that every new connection waits on would stall them. Call with the lock held.
+    private func scheduleAuditWrite() {
+        guard !auditWriteScheduled else { return }
+        auditWriteScheduled = true
+        auditQueue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.writeAudit() }
+    }
+    func writeAudit() {
+        lock.lock(); auditWriteScheduled = false; guard auditDirty else { lock.unlock(); return }; auditDirty = false; let snapshot = audit; lock.unlock()
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: auditURL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auditURL.path)
+        }
+    }
     private func auditLocked(_ actor: String, _ action: String, _ detail: String) {
         let event = FilterAuditRecord(actor: actor, action: action, detail: detail, previousHash: audit.last?.hash)
         audit.append(event); if audit.count > 5000 { audit.removeFirst(audit.count - 5000) }
-        if let data = try? JSONEncoder().encode(audit) { try? data.write(to: auditURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auditURL.path) }
+        auditDirty = true
+        scheduleAuditWrite()
     }
     /// History is written every half minute while there is something new, so it survives a restart without writing on every connection.
     func saveHistory() {
@@ -161,7 +180,7 @@ final class FilterStore {
     func decide(_ flow: NEFilterFlow, _ info: FlowInfo) -> NEFilterNewFlowVerdict {
         lock.lock(); defer { lock.unlock() }
         if NetRuleEngine.isExempt(app: info.app, host: info.host, team: info.team, valid: info.valid) { record(info, .allow, nil); return .allow() }
-        let decision = NetRuleEngine.decide(app: info.app, host: info.host, port: info.port, address: info.remoteAddress, outbound: info.outbound, team: info.team, parent: info.parent, rules: rules, settings: settings)
+        let decision = ruleIndex.decide(app: info.app, host: info.host, port: info.port, address: info.remoteAddress, outbound: info.outbound, team: info.team, parent: info.parent, settings: settings)
         if let name = index.match(.block, host: info.host, address: info.remoteAddress) {
             let overridden = decision.rule.map { $0.action == .allow && $0.app != "*" } ?? false
             if !overridden { return finish(flow, info, .block, rule: nil, list: name) }
@@ -184,23 +203,35 @@ final class FilterStore {
             return finish(flow, info, settings.passiveAction, rule: nil, list: nil)
         }
         if settings.askMode {
-            // If the user client is unavailable, record and allow the flow for
-            // later review. Never leave sockets paused with nobody able
-            // to answer them (for example during login or after the UI crashes).
-            if !clientAvailable() { return finish(flow, info, .allow, rule: nil, list: nil) }
+            // Nobody can be asked (VayuSetu is closed, has not opened yet after login, or lost its connection to the filter). Sockets are never left
+            // paused with nobody able to answer them; the person's own setting decides, and the decision is listed, counted and shown.
+            if !clientAvailable() { return unattendedLocked(flow, info) }
             if settings.askPolicy == .newApplication, let session = sessionDecisions[info.app] { return finish(flow, info, session, rule: nil, list: nil) }
             if settings.askPolicy == .everyConnection || !hasApplicationRule(for: info.app) { return askLocked(flow, info) }
         }
         return finish(flow, info, decision.action, rule: nil, list: nil)
     }
+    private var lastUnattendedAudit = Date.distantPast
+    /// Applies the "when VayuSetu can't ask you" setting, and leaves a trace of it: a reason on the connection, a count, and an audit entry (at most one every five minutes).
+    private func unattendedLocked(_ flow: NEFilterFlow, _ info: FlowInfo) -> NEFilterNewFlowVerdict {
+        let action = settings.unavailableAction
+        if action == .allow { usage.unattendedAllowed = (usage.unattendedAllowed ?? 0) + 1 } else { usage.unattendedBlocked = (usage.unattendedBlocked ?? 0) + 1 }
+        usage.unattendedLast = Date()
+        if Date().timeIntervalSince(lastUnattendedAudit) > 300 {
+            lastUnattendedAudit = Date()
+            auditLocked("system", "connection.unattended", "nobody could be asked; action=\(action.rawValue)")
+        }
+        return finish(flow, info, action, rule: nil, list: nil, reason: Self.unattendedReason)
+    }
+    static let unattendedReason = "VayuSetu could not ask"
     private func hasApplicationRule(for app: String) -> Bool {
         rules.contains { rule in
             NetRuleEngine.isActive(rule, now: Date(), settings: settings) && rule.app == app && rule.host == "*" && rule.port == "*"
         }
     }
     /// Records the decision and turns it into the verdict. An allowed connection is handed over for byte counting only when that is switched on.
-    private func finish(_ flow: NEFilterFlow, _ info: FlowInfo, _ action: NetAction, rule: UUID?, list: String?) -> NEFilterNewFlowVerdict {
-        let id = record(info, action, rule, list: list)
+    private func finish(_ flow: NEFilterFlow, _ info: FlowInfo, _ action: NetAction, rule: UUID?, list: String?, reason: String? = nil) -> NEFilterNewFlowVerdict {
+        let id = record(info, action, rule, list: list, reason: reason)
         return verdict(for: flow, action, recordID: id)
     }
     private func verdict(for flow: NEFilterFlow, _ action: NetAction, recordID: Int64) -> NEFilterNewFlowVerdict {
@@ -210,9 +241,9 @@ final class FilterStore {
         tracked[flow.identifier] = recordID
         return .filterDataVerdict(withFilterInbound: true, peekInboundBytes: Self.peekSize, filterOutbound: true, peekOutboundBytes: Self.peekSize)
     }
-    @discardableResult private func record(_ info: FlowInfo, _ verdict: NetAction, _ rule: UUID?, list: String? = nil) -> Int64 {
+    @discardableResult private func record(_ info: FlowInfo, _ verdict: NetAction, _ rule: UUID?, list: String? = nil, reason: String? = nil) -> Int64 {
         let id = nextID; nextID += 1; dirty = true
-        flows.append(FlowRecord(id: id, time: Date(), app: info.app, appName: info.appName, host: info.host, port: info.port, proto: info.proto, outbound: info.outbound, verdict: verdict, rule: rule, team: info.team, identity: identityNote(info), parent: info.parent, remoteAddress: info.remoteAddress, list: list))
+        flows.append(FlowRecord(id: id, time: Date(), app: info.app, appName: info.appName, host: info.host, port: info.port, proto: info.proto, outbound: info.outbound, verdict: verdict, rule: rule, team: info.team, identity: identityNote(info), parent: info.parent, remoteAddress: info.remoteAddress, list: list, reason: reason))
         if flows.count > maximumFlows { flows.removeFirst(flows.count - maximumFlows) }
         if let rule { var hit = usage.rules[rule.uuidString] ?? HitCount(); hit.count += 1; hit.last = Date(); usage.rules[rule.uuidString] = hit }
         if let list { var hit = usage.lists[list] ?? HitCount(); hit.count += 1; hit.last = Date(); usage.lists[list] = hit }
@@ -294,7 +325,7 @@ final class FilterStore {
         return true
     }
     func releaseAll() {
-        saveHistory()
+        saveHistory(); writeAudit()
         lock.lock(); let items = waiting; waiting = [:]; lock.unlock()
         for (_, item) in items { item.timer?.cancel(); provider?.resumeFlow(item.flow, with: NEFilterNewFlowVerdict.allow()) }
     }
@@ -311,10 +342,16 @@ final class FilterStore {
         lock.unlock()
         for id in leaving { resolve(id, settings: nil, remember: false, timedOut: true) }     // asking was switched off: let waiting connections through by the default
     }
-    func currentLists() -> [NetList] { lock.lock(); defer { lock.unlock() }; return lists }
+    /// The lists as saved, with their entries. The filter does not keep the entries in memory (the index is built from them once), so
+    /// they are read back from the file; a large list would otherwise cost tens of megabytes of a system extension's memory.
+    func currentLists() -> [NetList] {
+        lock.lock(); let fallback = lists; lock.unlock()
+        if let data = try? Data(contentsOf: listsURL), let saved = try? JSONDecoder().decode([NetList].self, from: data) { return saved }
+        return fallback
+    }
     func setLists(_ new: [NetList]) {
         let built = NetListIndex(new)       // built before taking the lock: a large list takes a moment
-        lock.lock(); lists = new; index = built; sessionDecisions.removeAll(); auditLocked("app", "lists.updated", "count=\(new.count)")
+        lock.lock(); lists = new.map { var l = $0; l.entries = []; return l }; index = built; sessionDecisions.removeAll(); auditLocked("app", "lists.updated", "count=\(new.count)")
         if let data = try? JSONEncoder().encode(new) { try? data.write(to: listsURL, options: .atomic); try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: listsURL.path) }
         lock.unlock()
     }
@@ -339,19 +376,42 @@ final class FilterService: NSObject, NSXPCListenerDelegate, VayuFilterXPC {
     private var clientCount = 0
     var hasConnectedClient: Bool { clientsLock.lock(); defer { clientsLock.unlock() }; return clientCount > 0 }
 
+    private var everAccepted = false
+    private var attempt = 0
+    private var serviceName: String { ((Bundle.main.object(forInfoDictionaryKey: "NetworkExtension") as? [String: Any])?["NEMachServiceName"] as? String) ?? FilterNames.machService }
+
     func start() {
         guard listener == nil else { return }
-        let name = ((Bundle.main.object(forInfoDictionaryKey: "NetworkExtension") as? [String: Any])?["NEMachServiceName"] as? String) ?? FilterNames.machService
-        let listener = NSXPCListener(machServiceName: name)
-        listener.delegate = self
-        listener.resume()
-        self.listener = listener
+        activate()
+        scheduleRetry()
+    }
+    private func activate() {
+        listener?.invalidate()
+        let fresh = NSXPCListener(machServiceName: serviceName)
+        fresh.delegate = self
+        fresh.resume()
+        listener = fresh
+    }
+    /// When an upgrade replaces a running filter, the old version can still own the connection point for a moment, and macOS refuses the new
+    /// one's request ("Operation not permitted") without telling it. Nothing in the process can see that, so until the app has connected
+    /// once, ask again on a widening schedule (2, 4, 8, 15, 30, then every 60 seconds). Once a client has connected, the listener works.
+    private func scheduleRetry() {
+        let delays = [2, 4, 8, 15, 30, 60]
+        let delay = attempt < delays.count ? delays[attempt] : 60
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
+            guard let self else { return }
+            self.clientsLock.lock(); let accepted = self.everAccepted; self.clientsLock.unlock()
+            guard !accepted else { return }
+            self.attempt += 1
+            self.activate()
+            self.scheduleRetry()
+        }
     }
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         connection.setCodeSigningRequirement(FilterNames.clientRequirement)
         connection.exportedInterface = NSXPCInterface(with: VayuFilterXPC.self)
         connection.exportedObject = self
-        clientsLock.lock(); clientCount += 1; clientsLock.unlock()
+        clientsLock.lock(); clientCount += 1; everAccepted = true; clientsLock.unlock()
         connection.invalidationHandler = { [weak self] in
             guard let self else { return }
             self.clientsLock.lock(); self.clientCount = max(0, self.clientCount - 1)

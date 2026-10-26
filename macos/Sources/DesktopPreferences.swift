@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import ServiceManagement
 import SwiftUI
+import VayuSetuCore
 
 @MainActor final class DesktopPreferences: ObservableObject {
     @Published var connectOnLaunch: Bool { didSet { UserDefaults.standard.set(connectOnLaunch, forKey: "connect-on-launch") } }
@@ -24,17 +25,19 @@ struct MenuControls: View {
     @Environment(\.openWindow) private var openWindow
     init(store: AppStore, extensions: ExtensionManager, filter: FilterClient) { self.store = store; self.extensions = extensions; self.filter = filter; self.tunnel = store.tunnel }
     var body: some View {
-        Text("VayuSetu · \(tunnel.statusText)")
+        Text("VayuSetu · \(store.connectionLabel)")
+        let proof = ProtectionProofEngine.evaluate(MacProofSource.observations(store: store, tunnel: tunnel, filter: filter, now: Date()))
+        if proof.verdict != .off { Text(proof.headline) }
         Text(store.active?.name ?? "No VPN profile selected")
         Divider()
         Button(store.networkActive ? "Turn protection off" : "Turn protection on") {
-            if store.networkActive { Task { _ = await store.powerTapped() } }
-            else { extensions.activate { Task { if await store.powerTapped() { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } } } }
+            if store.networkActive { Task { _ = await store.powerTapped(source: "menu") } }
+            else { extensions.activate { Task { if await store.powerTapped(source: "menu") { openWindow(id: "main"); NSApplication.shared.activate(ignoringOtherApps: true) } } } }
         }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting || store.protectionBusy)
         Divider()
-        Toggle(isOn: Binding(get: { store.vpnPill == .active || store.vpnPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.vpn) } } })) { Label("VPN", systemImage: "lock.shield") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
-        Toggle(isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { _ in extensions.activate { Task { await store.togglePill(.dns) } } })) { Label("Encrypted DNS", systemImage: "network") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
-        Toggle(isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { _ in Task { await store.togglePill(.adblock) } })) { Label("Adblock in Safari", systemImage: "hand.raised") }
+        Toggle(isOn: Binding(get: { store.vpnPill == .active || store.vpnPill == .pending }, set: { on in extensions.activate { Task { await store.setPill(.vpn, enabled: on, source: "menu") } } })) { Label("VPN", systemImage: "lock.shield") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle(isOn: Binding(get: { store.dnsPill == .active || store.dnsPill == .pending }, set: { on in extensions.activate { Task { await store.setPill(.dns, enabled: on, source: "menu") } } })) { Label("Encrypted DNS", systemImage: "network") }.disabled(!TunnelController.available || !tunnel.ready || extensions.requesting)
+        Toggle(isOn: Binding(get: { store.adblockPill == .active || store.adblockPill == .pending }, set: { on in Task { await store.setPill(.adblock, enabled: on, source: "menu") } })) { Label("Adblock in Safari", systemImage: "hand.raised") }
         Divider()
         networkSection
         Divider()
@@ -55,6 +58,7 @@ struct MenuControls: View {
             ForEach(Array(filter.flows.filter { $0.verdict == .block }.suffix(5).reversed()), id: \.id) { flow in
                 Text("Blocked: \(flow.appName) → \(flow.host)")
             }
+            Button("Turn network filter off") { filter.setEnabled(false, extensions: extensions) }
             Menu("Filter mode") {
                 ForEach(FilterMode.allCases) { mode in Button((filter.settings.mode == mode ? "✓ " : "") + mode.title) { filter.setMode(mode) } }
             }
@@ -63,6 +67,8 @@ struct MenuControls: View {
             }
         } else {
             Text("Network filter · \(filter.status == .off ? "off" : "not running")")
+            // If macOS ever stalls a content filter, switching it off here restores the network at once.
+            if filter.status == .unreachable || filter.status == .starting || filter.status == .needsApproval { Button("Turn network filter off") { filter.setEnabled(false, extensions: extensions) } }
         }
     }
     private static func rate(_ bytesPerSecond: Int64) -> String {
@@ -103,6 +109,17 @@ enum CrashTrace {
             action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND
             sigemptyset(&action.sa_mask)
             sigaction(signalNumber, &action, nil)
+        }
+        // Quits are traced too: who asked (the sender of the Apple event, if any) and the calls that led here. The app is not meant to quit
+        // by itself, so a trace here names whatever did it.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            var text = "VayuSetu is quitting at \(Date())\n"
+            if let event = NSAppleEventManager.shared().currentAppleEvent {
+                let pid = event.attributeDescriptor(forKeyword: AEKeyword(keySenderPIDAttr))?.int32Value ?? 0
+                text += "Apple event \(event.eventClass)/\(event.eventID) from pid \(pid)\n"
+            } else { text += "No Apple event is being handled.\n" }
+            text += Thread.callStackSymbols.joined(separator: "\n") + "\n"
+            _ = text.withCString { write(CrashTrace.descriptor, $0, strlen($0)) }
         }
         NSSetUncaughtExceptionHandler { exception in
             let text = "Uncaught exception: \(exception.name.rawValue) \(exception.reason ?? "")\n" + exception.callStackSymbols.joined(separator: "\n") + "\n"

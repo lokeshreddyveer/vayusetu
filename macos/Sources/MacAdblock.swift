@@ -33,10 +33,15 @@ struct MacAdblock: View {
 
     var body: some View {
         MacPage(title: "Adblock", subtitle: "Block distractions and trackers in Safari, and across apps with VayuSetu DNS.") {
-            HStack(alignment: .top, spacing: 20) {
-                VStack(spacing: 20) { protection; extensions }.frame(width: 380)
-                VStack(spacing: 20) { mode; manage; details; tools; activity }.frame(maxWidth: .infinity)
+            MacPanelLayout {
+                protection
+                mode
+                extensions
+                manage
+                details
+                tools
             }
+            activity
         }
         .task { await filtering.refresh() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText]) { result in
@@ -153,10 +158,10 @@ struct MacAdblock: View {
             }
         }
     }
+    @Environment(\.openDNSTab) private var openDNS
     private var activity: some View {
-        MacPanel("DNS filtering activity", icon: "chart.xyaxis.line") {
+        MacPanel("DNS filtering", icon: "chart.xyaxis.line", trailing: { Button("Open DNS activity") { openDNS?() }.buttonStyle(MacHoverButtonStyle()) }) {
             VStack(alignment: .leading, spacing: 8) {
-                VSActivityDashboard(filtering: filtering).padding(.horizontal, -4)
                 Text("DNS filtering is separate from Safari: the same lists can block domains for all apps through VayuSetu DNS. Switch it on from the DNS page.").font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }

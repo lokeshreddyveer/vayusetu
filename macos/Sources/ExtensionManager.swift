@@ -6,7 +6,8 @@ import Combine
     @Published var message = ""
     @Published var requesting = false
     @Published var activated = false
-    private var completion: (() -> Void)?
+    /// Everything waiting for the extension to be ready. A tap that arrives while a request is already pending is kept, not dropped.
+    private var completions: [() -> Void] = []
     // The network filter is a second system extension, activated on its own.
     @Published var filterRequesting = false
     @Published var filterActivated = false
@@ -95,9 +96,9 @@ import Combine
     }
     func activate(onReady: (() -> Void)? = nil) {
         if activated { onReady?(); return }
+        if let onReady { completions.append(onReady) }
         guard !requesting else { return }
-        guard TunnelController.available else { message = "Sign the VPN build with your provisioned Developer ID team before activating the extension."; return }
-        completion = onReady
+        guard TunnelController.available else { message = "Sign the VPN build with your provisioned Developer ID team before activating the extension."; completions = []; return }
         requesting = true
         message = "Requesting the VPN extension. macOS may ask for approval in System Settings."
         let id = (Bundle.main.bundleIdentifier ?? "app.vayusetu.macos") + ".tunnel"
@@ -121,7 +122,8 @@ import Combine
         Task { @MainActor in
             self.requesting = false
             self.activated = result == .completed
-            if self.activated { self.completion?() }; self.completion = nil
+            let waiting = self.completions; self.completions = []
+            if self.activated { waiting.forEach { $0() } }
             self.message = result == .completed ? "" : "Extension activation will finish after restarting this Mac."
         }
     }
@@ -130,7 +132,7 @@ import Combine
             Task { @MainActor in self.filterRequesting = false; self.filterActivated = false; self.filterCompletion = nil; self.filterMessage = "The network filter could not be activated: " + error.localizedDescription }
             return
         }
-        Task { @MainActor in self.requesting = false; self.activated = false; self.completion = nil; self.message = "Extension activation failed. Check signing, provisioning and installation in /Applications. Error: \(error.localizedDescription)" }
+        Task { @MainActor in self.requesting = false; self.activated = false; self.completions = []; self.message = "Extension activation failed. Check signing, provisioning and installation in /Applications. Error: \(error.localizedDescription)" }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, foundProperties properties: [OSSystemExtensionProperties]) {
         let id = request.identifier

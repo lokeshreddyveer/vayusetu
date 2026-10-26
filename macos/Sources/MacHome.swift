@@ -8,9 +8,14 @@ struct MacHome: View {
     @ObservedObject var store: AppStore
     @ObservedObject var tunnel: TunnelController
     @ObservedObject var network: NetworkDiagnostics
+    @ObservedObject var filter: FilterClient
+    @Environment(\.extensionManager) private var extensionManager
+    @Environment(\.wifiWatcher) private var wifiWatcher
+    @ObservedObject private var tamper = TamperMonitor.shared
     /// Prepares the VPN extension, then runs the action.
     let activate: (@escaping () -> Void) -> Void
-    @StateObject private var live = LiveDeviceSpeed()
+    /// Not observed here: the live meter changes every second and would redraw all of Home. The two panels that show it observe it themselves.
+    private let speed = SpeedTracker.shared
     @State private var hoveringPower = false
     @State private var showingModes = false
     @State private var modeConnects = false
@@ -45,19 +50,24 @@ struct MacHome: View {
 
     var body: some View {
         MacPage(title: "Home", subtitle: "Your private connection, on your terms.") {
-            HStack(alignment: .top, spacing: 20) {
-                VStack(spacing: 20) { powerPanel; protectionsPanel }.frame(width: 340)
-                VStack(spacing: 20) {
-                    connectionPanel
-                    livePanel
-                    VSHomeActivityPanel(filtering: store.filtering)
-                    statusPanel
-                }.frame(maxWidth: .infinity)
+            if let wifiWatcher { MacWiFiSuggestionCard(watcher: wifiWatcher, store: store) }
+            if let extensionManager { MacSetupGuide(store: store, tunnel: tunnel, filter: filter, extensions: extensionManager) }
+            MacPanelLayout {
+                powerPanel
+                MacPanel("Your route", icon: "point.topleft.down.to.point.bottomright.curvepath", trailing: { ScenePauseButton() }) { MacRouteScene(store: store, tracker: speed) }
+                protectionsPanel
+                MacSpeedPanel(store: store, tunnel: tunnel, tracker: speed)
+                connectionPanel
+                livePanel
             }
-            if !tunnel.message.isEmpty { Label(tunnel.message, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.orange).textSelection(.enabled) }
-            if !store.protectionNotice.isEmpty { Label(store.protectionNotice, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary) }
+            MacProtectionProof(store: store, tunnel: tunnel, filter: filter)
+            VSHomeActivityPanel(filtering: store.filtering)
+            MacFailureDetails(tunnel: tunnel, store: store)
+            if let warning = tamper.verdict.message { Label(warning, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).textSelection(.enabled) }
+            if !tunnel.message.isEmpty, tunnel.running || tunnel.stage != .failed { Label(tunnel.message, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.orange).textSelection(.enabled) }
             if !TunnelController.available { Text("This copy cannot activate a VPN. Open the signed VayuSetu app from Applications.").font(.footnote).foregroundStyle(.secondary) }
         }
+        .onAppear { SpeedTracker.shared.start(mode: { [store] in store.speedMode }, profile: { [store] in store.selected.map { SpeedBestKey.token($0.uuidString) } }) }
         .sheet(isPresented: $showingModes) { MacModeSheet(store: store, connectsAfterChoosing: modeConnects, activate: activate).frame(width: 460) }
     }
 
@@ -102,13 +112,20 @@ struct MacHome: View {
                 protection("Encrypted DNS", icon: "globe", state: store.dnsPill, which: .dns, needsVPN: true)
                 Divider()
                 protection("Safari adblock", icon: "hand.raised", state: store.adblockPill, which: .adblock, needsVPN: false)
-            }
+                if extensionManager?.requesting == true {
+                    Label("Waiting for macOS to start the VayuSetu extension…", systemImage: "hourglass").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                if !store.protectionNotice.isEmpty {
+                    Label(store.protectionNotice, systemImage: "info.circle").font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+            }.macAnimate(value: store.protectionNotice)
         }
     }
     private func protection(_ title: String, icon: String, state: PillState, which: ProtectionPill, needsVPN: Bool) -> some View {
         MacRow(icon: icon, title: title, detail: word(state), tint: color(state)) {
             Toggle("", isOn: Binding(get: { state != .off }, set: { enabled in
-                if needsVPN { activate { Task { await store.setPill(which, enabled: enabled) } } } else { Task { await store.setPill(which, enabled: enabled) } }
+                if needsVPN { activate { Task { await store.setPill(which, enabled: enabled, source: "Home") } } } else { Task { await store.setPill(which, enabled: enabled, source: "Home") } }
             })).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel(title)
                 .disabled(store.protectionBusy || tunnel.busy || (needsVPN && (!TunnelController.available || !tunnel.ready)))
         }
@@ -137,18 +154,22 @@ struct MacHome: View {
                         Button("Manage resolvers…") { openDNS?() }
                     } label: { Text("Change") }.menuStyle(.borderlessButton).fixedSize().disabled(tunnel.running || tunnel.busy)
                 }
+                if store.active != nil {
+                    Divider()
+                    let kill = KillSwitchState.assess(settingOn: store.strictRouting, vpnRunning: tunnel.running && !tunnel.localDNSRunning, connected: tunnel.status == .connected, savedCapture: tunnel.savedStrictCapture)
+                    MacRow(icon: kill == .off || kill.needsAttention ? "lock.open" : "lock.shield", title: kill.title, detail: kill.detail, tint: kill.needsAttention ? .orange : (kill.isConfirmedProtective ? .green : .secondary)) {
+                        Toggle("", isOn: $store.strictRouting).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel("Strict routing")
+                            .disabled(tunnel.running || tunnel.busy)
+                    }
+                }
             }
         }
     }
 
     private var livePanel: some View {
         MacPanel("Traffic", icon: "arrow.up.arrow.down", trailing: { MacChip(text: tunnel.ratesAvailable ? "Tunnel" : "This Mac", tint: tunnel.ratesAvailable ? .green : .secondary) }) {
-            let down = tunnel.ratesAvailable ? tunnel.receivedPerSecond : live.down
-            let up = tunnel.ratesAvailable ? tunnel.sentPerSecond : live.up
             VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 20) {
-                    MacFigure(caption: "Download", value: down.map { SpeedFormat.text($0) } ?? "—", tint: VSDesign.accent)
-                    MacFigure(caption: "Upload", value: up.map { SpeedFormat.text($0) } ?? "—", tint: .green)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 16)], alignment: .leading, spacing: 14) {
                     MacFigure(caption: "Received", value: bytes(tunnel.stats?.received))
                     MacFigure(caption: "Sent", value: bytes(tunnel.stats?.sent))
                 }
@@ -173,10 +194,33 @@ struct MacHome: View {
 struct ChecksRouteKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
 extension EnvironmentValues { var openChecksPage: (() -> Void)? { get { self[ChecksRouteKey.self] } set { self[ChecksRouteKey.self] = newValue } } }
 
-/// The activity chart inside a Mac panel.
+/// Today's DNS counts in one line, with a way to the full activity. The charts, rankings and the live view are on the Encrypted DNS page, which
+/// is the only place that counts DNS lookups; showing them again here and on the Adblock page said the same thing three times.
 struct VSHomeActivityPanel: View {
     @ObservedObject var filtering: FilteringController
-    var body: some View { MacPanel("DNS activity", icon: "chart.xyaxis.line") { VSHomeActivity(filtering: filtering).padding(.horizontal, -4) } }
+    @Environment(\.openDNSTab) private var openDNS
+    /// Read from the activity database every few seconds, not on every redraw of the panel.
+    @State private var today: ActivitySeries?
+    var body: some View {
+        let shown = today
+        MacPanel("DNS today", icon: "chart.xyaxis.line", trailing: { Button("Open DNS activity") { openDNS?() }.buttonStyle(MacHoverButtonStyle()) }) {
+            if shown?.isEmpty ?? true {
+                Text("No lookups counted yet today. Counts appear while Encrypted DNS is on.").font(.system(size: 12)).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 24) {
+                    MacFigure(caption: "Lookups", value: (shown?.requests ?? 0).formatted(), tint: VSDesign.accent, rolls: true)
+                    MacFigure(caption: "Blocked", value: (shown?.blocked ?? 0).formatted(), tint: .orange, rolls: true)
+                }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                let fresh = filtering.activitySeries(.today)
+                if fresh != today { today = fresh }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
 }
 
 /// Choose the network mode: a plain list of four modes with a short description each.
@@ -216,8 +260,8 @@ struct MacModeSheet: View {
         }.padding(22).background(VSDesign.background)
     }
     private func choose(_ mode: Mode) {
-        if mode.safariOnly { Task { await store.chooseMode(vpn: false, dns: false, safari: true) }; dismiss(); return }
-        if store.networkActive || connectsAfterChoosing { activate { Task { await store.chooseMode(vpn: mode.vpn, dns: mode.dns) } } }
+        if mode.safariOnly { Task { await store.chooseMode(vpn: false, dns: false, safari: true, source: "Home") }; dismiss(); return }
+        if store.networkActive || connectsAfterChoosing { activate { Task { await store.chooseMode(vpn: mode.vpn, dns: mode.dns, source: "Home") } } }
         else { store.saveMode(vpn: mode.vpn, dns: mode.dns) }
         dismiss()
     }

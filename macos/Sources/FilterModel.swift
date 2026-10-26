@@ -49,6 +49,8 @@ struct FlowRecord: Codable, Identifiable, Hashable {
     /// Bytes seen on the connection. Only counted while "Count traffic" is on, so nil otherwise.
     var bytesIn: Int64? = nil
     var bytesOut: Int64? = nil
+    /// Why the verdict was not the usual one, when it was not: "VayuSetu could not ask". Nil for an ordinary decision, and for history saved before this existed.
+    var reason: String? = nil
 }
 
 /// A weekly window. `days` use Calendar weekdays (1 = Sunday … 7 = Saturday); times are minutes after midnight.
@@ -189,6 +191,10 @@ struct HitCount: Codable, Hashable { var count = 0; var last = Date.distantPast 
 struct FilterUsage: Codable, Equatable {
     var rules: [String: HitCount] = [:]
     var lists: [String: HitCount] = [:]
+    /// Connections decided automatically because nobody could be asked (VayuSetu closed, not yet open after login, or not answering).
+    var unattendedAllowed: Int? = nil
+    var unattendedBlocked: Int? = nil
+    var unattendedLast: Date? = nil
 }
 
 struct FilterAuditRecord: Codable, Hashable, Identifiable {
@@ -234,8 +240,12 @@ struct FilterSettings: Codable, Equatable {
     var inboundAction: NetAction? = nil
     /// Count the bytes of each allowed connection. Off by default: the extension then sees the data of every connection.
     var countTraffic = false
+    /// Ask mode, when there is nobody to ask (VayuSetu is closed, has not opened yet after login, or has lost its connection to the filter):
+    /// allow the connection or block it. Either way it is listed with the reason, counted, and shown on the Network page. Allow is the default
+    /// because blocking would cut the network for anything no rule covers until VayuSetu opens; people who prefer that choose Block.
+    var unavailableAction = NetAction.allow
 
-    enum CodingKeys: String, CodingKey { case askMode, askPolicy, defaultAction, askTimeout, automaticAskResolution, disabledGroups, mode, passiveAction, passiveCreatesRules, allowAppleSigned, inboundAction, countTraffic }
+    enum CodingKeys: String, CodingKey { case askMode, askPolicy, defaultAction, askTimeout, automaticAskResolution, disabledGroups, mode, passiveAction, passiveCreatesRules, allowAppleSigned, inboundAction, countTraffic, unavailableAction }
     init(askMode: Bool = true, askPolicy: AskPolicy = .newApplication, defaultAction: NetAction = .allow, askTimeout: Int = 20, automaticAskResolution: Bool = false, disabledGroups: [String]? = nil) {
         self.askMode = askMode; self.askPolicy = askPolicy; self.defaultAction = defaultAction; self.askTimeout = askTimeout
         self.automaticAskResolution = automaticAskResolution; self.disabledGroups = disabledGroups
@@ -254,6 +264,7 @@ struct FilterSettings: Codable, Equatable {
         allowAppleSigned = try c.decodeIfPresent(Bool.self, forKey: .allowAppleSigned) ?? true
         inboundAction = try c.decodeIfPresent(NetAction.self, forKey: .inboundAction)
         countTraffic = try c.decodeIfPresent(Bool.self, forKey: .countTraffic) ?? false
+        unavailableAction = try c.decodeIfPresent(NetAction.self, forKey: .unavailableAction) ?? .allow
     }
 }
 
@@ -342,6 +353,7 @@ enum NetRuleEngine {
         if isAddress(p) { return false }                  // an address matches only itself
         return h.hasSuffix("." + p)                       // a domain covers its subdomains, on whole labels only
     }
+    static func globMatches(_ p: [Character], _ h: [Character]) -> Bool { glob(p, h) }
     private static func glob(_ p: [Character], _ h: [Character]) -> Bool {
         var pi = 0, hi = 0, star = -1, mark = 0
         while hi < h.count {
@@ -377,6 +389,87 @@ enum NetRuleEngine {
         if valid && team == FilterNames.team && (app == "app.vayusetu" || app.hasPrefix("app.vayusetu.")) { return true }
         let h = normalise(host)
         return h == "localhost" || h == "::1" || (isAddress(h) && h.hasPrefix("127."))
+    }
+}
+
+/// The rules, prepared once so that deciding a connection does not look at every rule. Plain names and domains are found in a table by
+/// the connection's host and each of its parent domains; only wildcards, patterns and address ranges are checked one by one. It gives the
+/// same answer as `NetRuleEngine.decide` (a test checks that on thousands of random cases).
+struct NetRuleIndex {
+    private enum Matcher { case range(AddressRange), glob([Character]) }
+    private struct Entry { var rule: NetRule; var order: Int; var score: Int; var matcher: Matcher? = nil }
+    private struct HostTable {
+        var any: [Entry] = []                       // destination "*"
+        var domains: [String: [Entry]] = [:]        // example.com: that name and its subdomains (an address matches only itself)
+        var subdomainsOnly: [String: [Entry]] = [:] // *.example.com
+        var general: [Entry] = []                   // patterns, address blocks and ranges: checked one by one
+        var isEmpty: Bool { any.isEmpty && domains.isEmpty && subdomainsOnly.isEmpty && general.isEmpty }
+    }
+    private var anyApp = HostTable()
+    private var perApp: [String: HostTable] = [:]
+    private(set) var count = 0
+
+    init(_ rules: [NetRule] = []) {
+        count = rules.count
+        for (order, rule) in rules.enumerated() {
+            var entry = Entry(rule: rule, order: order, score: NetRuleEngine.specificity(rule))
+            let p = NetRuleEngine.normalise(rule.host)
+            if let range = AddressRange(p) { entry.matcher = .range(range) } else if p.contains("*") && p != "*" { entry.matcher = .glob(Array(p)) }
+            if rule.app == "*" { Self.add(entry, to: &anyApp) } else { Self.add(entry, to: &perApp[rule.app, default: HostTable()]) }
+        }
+    }
+    private static func add(_ entry: Entry, to table: inout HostTable) {
+        let p = NetRuleEngine.normalise(entry.rule.host)
+        if p == "*" { table.any.append(entry) }
+        else if p.hasPrefix("*.") && !p.dropFirst(2).contains("*") && AddressRange(p) == nil { table.subdomainsOnly[String(p.dropFirst(2)), default: []].append(entry) }
+        else if p.contains("*") || AddressRange(p) != nil { table.general.append(entry) }
+        else { table.domains[p, default: []].append(entry) }
+    }
+
+    func decide(app: String, host: String, port: String, address: String? = nil, outbound: Bool = true, team: String? = nil, parent: String? = nil, settings: FilterSettings, now: Date = Date()) -> (action: NetAction, rule: NetRule?) {
+        let h = NetRuleEngine.normalise(host), a = address.map(NetRuleEngine.normalise)
+        let hIsAddress = NetRuleEngine.isAddress(h), aIsAddress = a.map(NetRuleEngine.isAddress) ?? false
+        let hChars = Array(h), aChars = a.map { Array($0) }
+        var best: Entry?
+        func consider(_ entry: Entry) {
+            let rule = entry.rule
+            guard rule.port == "*" || rule.port == port, rule.team == nil || rule.team == team, rule.parent == nil || rule.parent == parent,
+                  NetRuleEngine.isActive(rule, now: now, settings: settings) else { return }
+            switch rule.direction ?? .any { case .any: break; case .outbound: if !outbound { return }; case .inbound: if outbound { return } }
+            if let current = best {
+                if entry.score > current.score { best = entry }
+                else if entry.score == current.score {
+                    if rule.action == .block && current.rule.action == .allow { best = entry }
+                    else if rule.action == current.rule.action && entry.order < current.order { best = entry }
+                }
+            } else { best = entry }
+        }
+        func scan(_ table: HostTable) {
+            if table.isEmpty { return }
+            table.any.forEach(consider)
+            // the host itself, then each parent domain (not for an address, which matches only itself)
+            var rest = Substring(h); var first = true
+            while true {
+                if let hits = table.domains[String(rest)] { hits.forEach(consider) }
+                if !first, let hits = table.subdomainsOnly[String(rest)] { hits.forEach(consider) }
+                first = false
+                if NetRuleEngine.isAddress(h) { break }
+                guard let dot = rest.firstIndex(of: ".") else { break }
+                rest = rest[rest.index(after: dot)...]
+            }
+            if let a, a != h, let hits = table.domains[a], NetRuleEngine.isAddress(a) { hits.forEach(consider) }
+            for entry in table.general {
+                switch entry.matcher {
+                case .range(let range)?: if hIsAddress && range.contains(h) || (a.map { aIsAddress && range.contains($0) } ?? false) { consider(entry) }
+                case .glob(let pattern)?: if NetRuleEngine.globMatches(pattern, hChars) || (aChars.map { NetRuleEngine.globMatches(pattern, $0) } ?? false) { consider(entry) }
+                case nil: if NetRuleEngine.hostMatches(entry.rule.host, h, address: address) { consider(entry) }
+                }
+            }
+        }
+        scan(anyApp)
+        if let table = perApp[app] { scan(table) }
+        if let best { return (best.rule.action, best.rule) }
+        return (settings.defaultAction, nil)
     }
 }
 
@@ -445,20 +538,29 @@ enum NetListParser {
     }
 }
 
-/// Looks up a destination in the enabled lists. Whole names are found by a hash lookup on the name and each parent domain, so a list of
-/// hundreds of thousands of entries costs the same as a short one; patterns and address blocks are checked one by one.
+/// Looks up a destination in the enabled lists. Whole names are kept as 64-bit hashes (8 bytes each instead of a copy of the text, so a
+/// 400,000-entry list stays a few megabytes), and are found by a lookup on the name and each parent domain, so a long list costs the same
+/// as a short one. Two different names sharing a hash is possible in principle; with a list this size the chance is about one in
+/// 10 billion, and the result of such a clash would be one wrongly blocked name. Patterns and address blocks are checked one by one.
 struct NetListIndex {
-    private struct Side { var names: [String: String] = [:]; var addresses: [String: String] = [:]; var patterns: [(String, String)] = [] }
+    private struct Side { var names: [UInt64: UInt16] = [:]; var addresses: [UInt64: UInt16] = [:]; var patterns: [(String, UInt16)] = [] }
     private var block = Side(), allow = Side()
+    private var listNames: [String] = []
     var isEmpty: Bool { block.names.isEmpty && block.addresses.isEmpty && block.patterns.isEmpty && allow.names.isEmpty && allow.addresses.isEmpty && allow.patterns.isEmpty }
+    static func hash(_ text: String) -> UInt64 {
+        var value: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 { value = (value ^ UInt64(byte)) &* 0x100000001b3 }
+        return value
+    }
     init(_ lists: [NetList] = []) {
         for list in lists where list.enabled {
+            listNames.append(list.name); let id = UInt16(truncatingIfNeeded: listNames.count - 1)
             var side = list.kind == .block ? block : allow
             for entry in list.entries.prefix(NetList.maximumEntries) {
                 let e = NetRuleEngine.normalise(entry)
-                if e.contains("*") || e.contains("/") || AddressRange(e) != nil { if side.patterns.count < 5000 { side.patterns.append((e, list.name)) } }
-                else if NetRuleEngine.isAddress(e) { side.addresses[e] = side.addresses[e] ?? list.name }
-                else { side.names[e] = side.names[e] ?? list.name }
+                if e.contains("*") || e.contains("/") || AddressRange(e) != nil { if side.patterns.count < 5000 { side.patterns.append((e, id)) } }
+                else if NetRuleEngine.isAddress(e) { let k = Self.hash(e); if side.addresses[k] == nil { side.addresses[k] = id } }
+                else { let k = Self.hash(e); if side.names[k] == nil { side.names[k] = id } }
             }
             if list.kind == .block { block = side } else { allow = side }
         }
@@ -468,17 +570,17 @@ struct NetListIndex {
         let side = kind == .block ? block : allow
         let h = NetRuleEngine.normalise(host)
         for candidate in [h] + (address.map { [NetRuleEngine.normalise($0)] } ?? []) {
-            if let name = side.addresses[candidate] { return name }
+            if let id = side.addresses[Self.hash(candidate)] { return listNames[Int(id)] }
         }
         if !NetRuleEngine.isAddress(h) {
             var rest = Substring(h)
             while true {
-                if let name = side.names[String(rest)] { return name }
+                if let id = side.names[Self.hash(String(rest))] { return listNames[Int(id)] }
                 guard let dot = rest.firstIndex(of: ".") else { break }
                 rest = rest[rest.index(after: dot)...]
             }
         }
-        for (pattern, name) in side.patterns where NetRuleEngine.hostMatches(pattern, h, address: address) { return name }
+        for (pattern, id) in side.patterns where NetRuleEngine.hostMatches(pattern, h, address: address) { return listNames[Int(id)] }
         return nil
     }
 }

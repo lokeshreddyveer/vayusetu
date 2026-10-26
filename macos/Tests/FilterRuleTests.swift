@@ -128,6 +128,47 @@ import Foundation
         let hostPort = AlertRule.make(for: q, allow: true, scope: .hostPort, lifetime: .hour)!
         check(hostPort.host == "www.shop.example.co.uk" && hostPort.port == "443" && hostPort.expires != nil && hostPort.group == "Temporary")
         check(AlertRule.make(for: q, allow: true, scope: .app, lifetime: .restart)!.group == FilterNames.sessionGroup && AlertRule.make(for: q, allow: true, scope: .app, lifetime: .forever)!.host == "*")
+        // The prepared rule index must give exactly the answers of the plain engine, whatever the rules. Thousands of random cases.
+        var generator = SystemRandomNumberGenerator()
+        let appsPool = ["a.one", "a.two", "a.three", "*"], domains = ["example.com", "ads.example.com", "tracker.net", "x.y.z.org", "cdn.site.io"]
+        func randomHost() -> String {
+            switch Int.random(in: 0..<10, using: &generator) {
+            case 0: return "*"
+            case 1: return "*." + domains.randomElement(using: &generator)!
+            case 2: return "10.\(Int.random(in: 0..<3, using: &generator)).0.0/16"
+            case 3: return "ad*." + domains.randomElement(using: &generator)!
+            case 4: return "10.0.\(Int.random(in: 0..<3, using: &generator)).\(Int.random(in: 1..<4, using: &generator))"
+            default: return domains.randomElement(using: &generator)!
+            }
+        }
+        var mismatches = 0
+        for round in 0..<40 {
+            var set: [NetRule] = []
+            for _ in 0..<Int.random(in: 1...40, using: &generator) {
+                var r = NetRule(app: appsPool.randomElement(using: &generator)!, host: randomHost(), port: ["*", "*", "443", "80"].randomElement(using: &generator)!, action: Bool.random(using: &generator) ? .block : .allow)
+                if Int.random(in: 0..<6, using: &generator) == 0 { r.direction = Bool.random(using: &generator) ? .inbound : .outbound }
+                if Int.random(in: 0..<8, using: &generator) == 0 { r.team = Bool.random(using: &generator) ? "T1" : "T2" }
+                if Int.random(in: 0..<8, using: &generator) == 0 { r.parent = "Terminal" }
+                if Int.random(in: 0..<10, using: &generator) == 0 { r.group = "Off" }
+                if Int.random(in: 0..<10, using: &generator) == 0 { r.expires = Date().addingTimeInterval(Bool.random(using: &generator) ? -60 : 3600) }
+                set.append(r)
+            }
+            let index = NetRuleIndex(set)
+            var s = FilterSettings(); s.defaultAction = round % 2 == 0 ? .allow : .block; s.disabledGroups = ["Off"]
+            for _ in 0..<300 {
+                let app = ["a.one", "a.two", "a.nine"].randomElement(using: &generator)!
+                let host = (domains + ["www.example.com", "a.b.ads.example.com", "10.1.0.5", "10.0.2.2", "nothing.test", "adx.tracker.net", "10.2.200.1"]).randomElement(using: &generator)!
+                let port = ["443", "80", "25"].randomElement(using: &generator)!
+                let address: String? = Bool.random(using: &generator) ? "10.0.1.2" : nil
+                let outbound = Bool.random(using: &generator), team: String? = [nil, "T1", "T2"].randomElement(using: &generator)!, parent: String? = [nil, "Terminal", "Finder"].randomElement(using: &generator)!
+                let want = NetRuleEngine.decide(app: app, host: host, port: port, address: address, outbound: outbound, team: team, parent: parent, rules: set, settings: s)
+                let got = index.decide(app: app, host: host, port: port, address: address, outbound: outbound, team: team, parent: parent, settings: s)
+                if want.action != got.action || want.rule?.id != got.rule?.id { mismatches += 1 }
+            }
+        }
+        check(mismatches == 0)
+        // Hashed list entries behave like the plain ones, and a long list is cheap to hold.
+        check(NetListIndex.hash("example.com") == NetListIndex.hash("example.com") && NetListIndex.hash("example.com") != NetListIndex.hash("example.org"))
         print("Filter rule checks passed: \(count)")
     }
 }

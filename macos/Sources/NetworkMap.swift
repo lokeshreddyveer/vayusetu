@@ -76,17 +76,22 @@ struct NetworkMap: View {
     var body: some View {
         MacPanel("Where connections go", icon: "map", trailing: { Text("\(countryTotals.count) countries · \(unlocated) local or unlocated").font(.system(size: 11)).foregroundStyle(.secondary) }) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    Picker("", selection: $grouping) { ForEach(Grouping.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170).onChange(of: grouping) { _, _ in selected = nil }
-                    Picker("", selection: $window) { ForEach(Window.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
+                MacWrap(spacing: 12) {
+                    MacSegmented(selection: $grouping, options: Grouping.allCases, title: { $0.rawValue }).onChange(of: grouping) { _, _ in selected = nil }
+                    MacSegmented(selection: $window, options: Window.allCases, title: { $0.rawValue })
                     Toggle("Blocked only", isOn: $blockedOnly).toggleStyle(.checkbox).font(.system(size: 12))
-                    Spacer()
                     if selected != nil { Button("Show all") { selected = nil }.buttonStyle(MacHoverButtonStyle()).fixedSize() }
                     Button("World") { camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 25, longitude: 10), span: MKCoordinateSpan(latitudeDelta: 120, longitudeDelta: 300))) }.buttonStyle(MacHoverButtonStyle()).fixedSize()
                 }
-                HStack(alignment: .top, spacing: 12) {
-                    list.frame(width: 290, height: 460)
-                    mapView.frame(height: 460).frame(maxWidth: .infinity)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        list.frame(width: 290, height: 460)
+                        mapView.frame(minWidth: 380, maxWidth: .infinity).frame(height: 460)
+                    }
+                    VStack(spacing: 12) {
+                        list.frame(height: 240)
+                        mapView.frame(height: 360)
+                    }
                 }
                 if let group = groups.first(where: { $0.id == selected }) { detail(group) }
                 HStack(spacing: 16) {
@@ -139,7 +144,7 @@ struct NetworkMap: View {
                     }.buttonStyle(.plain)
                 }
             }
-        }
+        }.scrollIndicators(.hidden)
     }
 
     // MARK: Right: the map

@@ -27,9 +27,9 @@ struct MacProfiles: View {
 
     var body: some View {
         MacPage(title: "VPN Profiles", subtitle: "Import a VPN you already have. VayuSetu does not provide VPN servers.") {
-            HStack(alignment: .top, spacing: 20) {
-                list.frame(width: 360)
-                detail.frame(maxWidth: .infinity)
+            MacPanelLayout(minimumColumnWidth: 400) {
+                list
+                detail
             }
         }
         .toolbar { ToolbarItem { addMenu } }

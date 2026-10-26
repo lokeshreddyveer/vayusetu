@@ -7,7 +7,19 @@ import SwiftUI
 /// The app's side of the network filter: switches it on, talks to the extension, and holds what the Network page shows.
 @MainActor final class FilterClient: ObservableObject {
     enum Status: Equatable { case unavailable, off, starting, needsApproval, running, unreachable }
-    @Published private(set) var status = Status.off
+    @Published private(set) var status = Status.off {
+        didSet { if status != oldValue { Self.noteStatus(status) } }
+    }
+    /// The last few state changes, in a small text file beside the crash traces, so that "it is not working" can be answered from facts.
+    /// It holds only the state and the time.
+    private static func noteStatus(_ status: Status) {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/VayuSetu", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("filter-status.txt")
+        var lines = ((try? String(contentsOf: url, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        lines.append(ISO8601DateFormatter().string(from: Date()) + " " + String(describing: status))
+        try? lines.suffix(40).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
     @Published private(set) var flows: [FlowRecord] = []
     @Published private(set) var rules: [NetRule] = []
     @Published private(set) var settings = FilterSettings()
@@ -19,7 +31,12 @@ import SwiftUI
     @Published private(set) var activeProfile: String?
     @Published private(set) var refreshing = Set<UUID>()
     @Published var message = ""
+    /// Set by the Security Center to open the Network page already searching for one app.
+    @Published var focusApp: String?
     private var ticks = 0
+    private var unreachableSince: Date?
+    private var repairAttempts = 0
+    @Published private(set) var repairing = false
     private var connection: NSXPCConnection?
     private var task: Task<Void, Never>?
     private var lastID: Int64 = 0
@@ -56,6 +73,25 @@ import SwiftUI
             extensions.activateFilter { [weak self] in Task { await self?.configure(true) } }
         } else { Task { await configure(false) } }
     }
+    /// Switches the filter off and on again, which makes macOS start a fresh copy of it. The same thing the switch on this page does, done for you.
+    func repair() async {
+        guard wanted, !repairing else { return }
+        repairing = true; repairAttempts += 1; unreachableSince = Date(); defer { repairing = false }
+        message = "The network filter was not answering. Restarting it…"
+        let manager = NEFilterManager.shared()
+        try? await manager.loadFromPreferences()
+        manager.isEnabled = false
+        try? await manager.saveToPreferences()
+        disconnect()
+        try? await Task.sleep(for: .seconds(2))
+        try? await manager.loadFromPreferences()
+        manager.isEnabled = true
+        try? await manager.saveToPreferences()
+        try? await Task.sleep(for: .seconds(3))
+        await poll(first: false)
+        if status == .running { message = "" } else { message = "The network filter still is not answering. If this continues, switch it off and on at the top of this page." }
+    }
+    func repairNow() { repairAttempts = 0; Task { await repair() } }
     private func configure(_ on: Bool) async {
         let manager = NEFilterManager.shared()
         do {
@@ -113,12 +149,19 @@ import SwiftUI
         guard wanted else { return }
         let after = lastID
         guard let data = await ask({ $0.recentFlows(after: after, reply: $1) }), let new = try? JSONDecoder().decode([FlowRecord].self, from: data) else {
-            if status != .off { status = first ? .needsApproval : .unreachable }
+            let failure: Status = first ? .needsApproval : .unreachable
+            if status != .off, status != failure { status = failure }
+            if unreachableSince == nil { unreachableSince = Date() }
+            // The filter is switched on but not answering (for example just after an upgrade): restart it once, by itself, after a few seconds.
+            if !repairing, repairAttempts < 3, let since = unreachableSince, Date().timeIntervalSince(since) > (repairAttempts == 0 ? 8 : 40) { Task { await repair() } }
             return
         }
-        status = .running
+        unreachableSince = nil; repairAttempts = 0
+        // Only a change is published: the poll runs every second, and a repeated identical value would redraw every view that watches this.
+        if status != .running { status = .running }
         if !new.isEmpty {
             flows.append(contentsOf: new); lastID = new.last?.id ?? lastID
+            FirstSeenStore.shared.ingest(new)
             if flows.count > Self.maximumShown { flows.removeFirst(flows.count - Self.maximumShown) }
         }
         if first {
@@ -128,13 +171,13 @@ import SwiftUI
             loadProfiles()
         }
         ticks += 1
-        if ticks % 5 == 0, let d = await ask({ $0.usage(reply: $1) }), let u = try? JSONDecoder().decode(FilterUsage.self, from: d) { usage = u }
+        if ticks % 5 == 0, let d = await ask({ $0.usage(reply: $1) }), let u = try? JSONDecoder().decode(FilterUsage.self, from: d), u != usage { usage = u }
         if first, let d = await ask({ $0.audit(reply: $1) }), let a = try? JSONDecoder().decode([FilterAuditRecord].self, from: d) { audit = a }
         if ticks % 600 == 1 { await refreshDueLists() }
         if let d = await ask({ $0.pending(reply: $1) }), let q = try? JSONDecoder().decode([PendingQuestion].self, from: d) {
             if !q.isEmpty && q.map(\.id) != pending.map(\.id) { NSApplication.shared.dockTile.badgeLabel = "\(q.count)" }
             if q.isEmpty { NSApplication.shared.dockTile.badgeLabel = nil }
-            pending = q
+            if q != pending { pending = q }
         }
     }
     func startPolling() {
@@ -278,6 +321,8 @@ struct MacNetwork: View {
     @State private var search = ""
     @State private var paused = false
     @AppStorage("network-hide-local") private var hideLocal = true
+    @State private var resultFilter = ResultFilter.all
+    private enum ResultFilter: String, CaseIterable, Identifiable { case all = "All", blocked = "Blocked", allowed = "Allowed"; var id: String { rawValue } }
     @State private var frozen: [FlowRecord] = []
     @State private var selection = Set<Int64>()
     @State private var view = View_.live
@@ -301,7 +346,8 @@ struct MacNetwork: View {
 
     private var shown: [FlowRecord] {
         let source = paused ? frozen : client.flows
-        let visible = hideLocal ? source.filter { !Self.isLocalChatter($0) } : source
+        var visible = hideLocal ? source.filter { !Self.isLocalChatter($0) } : source
+        switch resultFilter { case .all: break; case .blocked: visible = visible.filter { $0.verdict == .block }; case .allowed: visible = visible.filter { $0.verdict == .allow } }
         let matching = search.isEmpty ? visible : visible.filter { $0.appName.localizedCaseInsensitiveContains(search) || $0.host.localizedCaseInsensitiveContains(search) || $0.app.localizedCaseInsensitiveContains(search) }
         return Array(matching.reversed().prefix(800))
     }
@@ -322,10 +368,13 @@ struct MacNetwork: View {
     var body: some View {
         MacPage(title: "Network", subtitle: "See which apps connect where, and block what you don't want.") {
             switchPanel
+            if client.status == .running { liveStrip }
+            MacFirewallScene(client: client)
             if !client.pending.isEmpty { questions }
             if client.status == .running || client.status == .unreachable || client.status == .starting { content }
         }
-        .onAppear { client.startPolling() }
+        .onAppear { client.startPolling(); applyFocus() }
+        .onChange(of: client.focusApp) { _, _ in applyFocus() }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .json, defaultFilename: "VayuSetu-network-rules") { _ in }
         .fileExporter(isPresented: $exportingAudit, document: auditDocument, contentType: .json, defaultFilename: "VayuSetu-network-audit") { _ in }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
@@ -356,6 +405,33 @@ struct MacNetwork: View {
         case .unreachable: return MacChip(text: "Not responding", tint: .red)
         }
     }
+    /// The Security Center can send you here to look at one app.
+    private func applyFocus() {
+        guard let app = client.focusApp else { return }
+        search = client.flows.last { $0.app == app }?.appName ?? app
+        view = .live; resultFilter = .all; hideLocal = false
+        client.focusApp = nil
+    }
+    /// What is happening right now, from the last minute of connections.
+    private var liveStrip: some View {
+        let cutoff = Date().addingTimeInterval(-60)
+        let recent = client.flows.filter { $0.time > cutoff }
+        let blocked = recent.filter { $0.verdict == .block }.count
+        return MacWrap(spacing: 12, lineSpacing: 12) {
+            liveFigure("Last minute", "\(recent.count)", "connections", "waveform.path.ecg", .primary)
+            liveFigure("Blocked", "\(blocked)", "in the last minute", "hand.raised.fill", blocked > 0 ? .red : .primary)
+            liveFigure("Apps", "\(Set(recent.map(\.app)).count)", "talking now", "app.badge", .primary)
+            liveFigure("Waiting", "\(client.pending.count)", client.pending.isEmpty ? "nothing to decide" : "need your answer", "questionmark.circle", client.pending.isEmpty ? .primary : .orange)
+            liveFigure("Mode", client.settings.mode.title, "\(client.rules.count) rules · \(client.lists.filter(\.enabled).count) lists", "slider.horizontal.3", .primary)
+        }
+    }
+    private func liveFigure(_ title: String, _ value: String, _ note: String, _ icon: String, _ tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(title, systemImage: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 20, weight: .semibold, design: .rounded)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
+            Text(note).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+        }.padding(12).frame(width: 150, alignment: .leading).macPanel()
+    }
     private var switchPanel: some View {
         MacPanel("Network filter", icon: "network.badge.shield.half.filled", trailing: { statusChip }) {
             VStack(alignment: .leading, spacing: 12) {
@@ -365,13 +441,34 @@ struct MacNetwork: View {
                 }
                 if client.status == .unavailable { Text("This build does not include the network filter. It is part of the VayuSetu download from GitHub.").font(.system(size: 12)).foregroundStyle(.secondary) }
                 if !extensions.filterMessage.isEmpty { Label(extensions.filterMessage, systemImage: "info.circle").font(.system(size: 12)).foregroundStyle(.orange) }
+                if client.status == .running, client.settings.askMode, client.settings.mode == .normal {
+                    Label("If VayuSetu is closed or cannot ask you, a connection no rule covers is " + (client.settings.unavailableAction == .allow ? "allowed" : "blocked") + " and listed with the reason. You can change this under Settings below.",
+                          systemImage: client.settings.unavailableAction == .allow ? "lock.open" : "lock").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let notice = unattendedNotice { Label(notice, systemImage: "exclamationmark.shield").font(.system(size: 12)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
                 if !client.message.isEmpty { Label(client.message, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(.orange) }
+                if client.status == .unreachable || client.repairing {
+                    HStack(spacing: 10) {
+                        if client.repairing { ProgressView().controlSize(.small) }
+                        Button("Restart the filter") { client.repairNow() }.buttonStyle(MacHoverButtonStyle(prominent: true)).disabled(client.repairing)
+                        Text("The filter is switched on but is not answering. This usually follows an update. VayuSetu restarts it by itself after a few seconds; this does it now.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
                 if client.status == .needsApproval || client.status == .unreachable { Text("The first time, macOS asks you to allow the filter. Approve it in System Settings → General → Login Items & Extensions → Network Extensions, then switch it on again.").font(.system(size: 12)).foregroundStyle(.secondary) }
             }
         }
     }
 
     // MARK: Questions
+    /// What happened while nobody could be asked, if anything did in the last week.
+    private var unattendedNotice: String? {
+        let allowed = client.usage.unattendedAllowed ?? 0, blocked = client.usage.unattendedBlocked ?? 0
+        guard allowed + blocked > 0, let last = client.usage.unattendedLast, Date().timeIntervalSince(last) < 7 * 86_400 else { return nil }
+        var parts: [String] = []
+        if allowed > 0 { parts.append("\(allowed.formatted()) allowed") }
+        if blocked > 0 { parts.append("\(blocked.formatted()) blocked") }
+        return parts.joined(separator: " and ") + " automatically while VayuSetu could not ask you (most recently " + last.formatted(date: .abbreviated, time: .shortened) + "). Each is listed in Connections with the reason."
+    }
     private var questions: some View {
         MacPanel("Waiting for your decision", icon: "questionmark.circle", trailing: { MacChip(text: "\(client.pending.count)", tint: .orange) }) {
             VStack(spacing: 10) {
@@ -390,7 +487,9 @@ struct MacNetwork: View {
                     }
                     if q.id != client.pending.last?.id { Divider() }
                 }
-                Text("If you do not answer, the connection follows the default (\(client.settings.defaultAction == .allow ? "allowed" : "blocked")) after \(client.settings.askTimeout) seconds.").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(client.settings.automaticAskResolution
+                     ? "If you do not answer, the connection is \(client.settings.defaultAction == .allow ? "allowed" : "blocked") after \(client.settings.askTimeout) seconds."
+                     : "The connection stays paused until you answer.").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
     }
@@ -398,15 +497,15 @@ struct MacNetwork: View {
     // MARK: Content
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Picker("", selection: $view) { ForEach(View_.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 560)
+            MacSegmented(selection: $view, options: View_.allCases, title: { $0.rawValue }).frame(maxWidth: .infinity, alignment: .center)
             if view != .rules && view != .lists {
-                HStack(spacing: 10) {
+                MacWrap {
                     HStack(spacing: 6) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search apps and destinations", text: $search).textFieldStyle(.plain) }
-                        .padding(8).frame(maxWidth: 320).background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    Toggle("Hide local network chatter", isOn: $hideLocal).toggleStyle(.checkbox).font(.system(size: 12)).help("Hides connections to devices on your own network and to port 5353 (Bonjour), which fill the list without telling you much.")
-                    Spacer(minLength: 8)
-                    Button { paused.toggle(); if paused { frozen = client.flows } } label: { Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill") }.buttonStyle(MacHoverButtonStyle()).fixedSize()
-                    Button { client.clearFlows(); frozen = [] } label: { Label("Clear", systemImage: "trash") }.buttonStyle(MacHoverButtonStyle()).fixedSize()
+                        .padding(.horizontal, 8).frame(width: 250, height: 28).background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    MacSegmented(selection: $resultFilter, options: ResultFilter.allCases, title: { $0.rawValue })
+                    Toggle("Hide local chatter", isOn: $hideLocal).toggleStyle(.checkbox).font(.system(size: 12)).help("Hides connections to devices on your own network and to port 5353 (Bonjour), which fill the list without telling you much.")
+                    Button { paused.toggle(); if paused { frozen = client.flows } } label: { Image(systemName: paused ? "play.fill" : "pause.fill").frame(width: 16) }.buttonStyle(MacHoverButtonStyle()).fixedSize().help(paused ? "Resume the live list" : "Pause the live list")
+                    Button { client.clearFlows(); frozen = [] } label: { Image(systemName: "trash").frame(width: 16) }.buttonStyle(MacHoverButtonStyle()).fixedSize().help("Clear the recorded connections")
                 }
             }
             switch view {
@@ -419,28 +518,39 @@ struct MacNetwork: View {
             }
         }
     }
+    /// The connection list. Few columns, each able to shrink, so it fits a narrow window without a hidden sideways scroll; the byte column
+    /// only exists while traffic is being counted.
+    private var connectionTable: AnyView {
+        let time = TableColumn("Time") { (flow: FlowRecord) in Text(flow.time, format: .dateTime.hour().minute().second()).monospacedDigit().foregroundStyle(.secondary) }.width(min: 64, ideal: 70, max: 80)
+        let app = TableColumn("App") { (flow: FlowRecord) in HStack(spacing: 6) { Image(nsImage: Self.icon(for: flow.app)).resizable().frame(width: 16, height: 16); Text(flow.appName).lineLimit(1) } }.width(min: 90, ideal: 140)
+        let destination = TableColumn("Destination") { (flow: FlowRecord) in
+            HStack(spacing: 6) {
+                Text(flow.host + (flow.port.isEmpty ? "" : ":" + flow.port)).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                Text(flow.proto).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            }
+        }.width(min: 120, ideal: 230)
+        let result = TableColumn("Result") { (flow: FlowRecord) in MacChip(text: flow.verdict == .allow ? "Allowed" : "Blocked", tint: flow.verdict == .allow ? .green : .red) }.width(min: 70, ideal: 76, max: 90)
+        let why = TableColumn("Why") { (flow: FlowRecord) in
+            HStack(spacing: 6) {
+                if let warning = flow.identity { MacChip(text: warning, tint: .orange) }
+                Text(reason(for: flow) + (flow.parent.flatMap { $0.caseInsensitiveCompare(flow.appName) == .orderedSame ? nil : " · via " + $0 } ?? "")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            }.help(reason(for: flow) + (flow.team.map { " · signed by team " + $0 } ?? " · no developer team"))
+        }.width(min: 90, ideal: 200)
+        if client.settings.countTraffic {
+            let data = TableColumn("Data") { (flow: FlowRecord) in
+                Text(flow.bytesIn == nil && flow.bytesOut == nil ? "" : "↓ " + Self.size(flow.bytesIn ?? 0) + "  ↑ " + Self.size(flow.bytesOut ?? 0)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+            }.width(min: 90, ideal: 120)
+            return AnyView(Table(shown, selection: $selection) { time; app; destination; data; result; why })
+        }
+        return AnyView(Table(shown, selection: $selection) { time; app; destination; result; why })
+    }
     private var connections: some View {
         MacPanel("Connections", icon: "arrow.left.arrow.right", trailing: { Text("\(client.flows.count) recorded").font(.system(size: 11)).foregroundStyle(.secondary) }) {
             if shown.isEmpty {
                 Text(client.status == .running ? "No connections yet. Use any app and they appear here." : "Waiting for the filter to start…").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
             } else {
-                Table(shown, selection: $selection) {
-                    TableColumn("Time") { Text($0.time, format: .dateTime.hour().minute().second()).monospacedDigit().foregroundStyle(.secondary) }.width(70)
-                    TableColumn("App") { Text($0.appName).lineLimit(1) }.width(min: 110, ideal: 150)
-                    TableColumn("Destination") { Text($0.host + ($0.port.isEmpty ? "" : ":" + $0.port)).lineLimit(1).textSelection(.enabled) }.width(min: 160, ideal: 260)
-                    TableColumn("Protocol") { Text($0.proto).foregroundStyle(.secondary) }.width(60)
-                    TableColumn("Data") { flow in
-                        Text(flow.bytesIn == nil && flow.bytesOut == nil ? "" : "↓ " + Self.size(flow.bytesIn ?? 0) + "  ↑ " + Self.size(flow.bytesOut ?? 0)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
-                    }.width(min: 90, ideal: 120)
-                    TableColumn("Result") { MacChip(text: $0.verdict == .allow ? "Allowed" : "Blocked", tint: $0.verdict == .allow ? .green : .red) }.width(80)
-                    TableColumn("Notes") { flow in
-                        HStack(spacing: 6) {
-                            if let warning = flow.identity { MacChip(text: warning, tint: .orange) }
-                            if let list = flow.list { MacChip(text: list, tint: flow.verdict == .block ? .red : .green) }
-                            if let parent = flow.parent { Text("via " + parent).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
-                        }.help(flow.team.map { "Signed by team " + $0 } ?? "Not signed by a developer team (Apple software has no team)")
-                    }.width(min: 90, ideal: 170)
-                }.frame(minHeight: 380)
+                connectionTable
+                    .frame(minHeight: 380).scrollIndicators(.hidden)
                     .contextMenu(forSelectionType: Int64.self) { ids in
                         let chosen = shown.filter { ids.contains($0.id) }
                         if let first = chosen.first {
@@ -505,6 +615,13 @@ struct MacNetwork: View {
                                 ForEach(AskPolicy.allCases) { Text($0.title).tag($0) }
                             }
                             Text(client.settings.askPolicy.detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                            Picker("When VayuSetu cannot ask you", selection: Binding(get: { client.settings.unavailableAction }, set: { var s = client.settings; s.unavailableAction = $0; client.update(settings: s) })) {
+                                Text("Allow, and list it").tag(NetAction.allow)
+                                Text("Block, and list it").tag(NetAction.block)
+                            }
+                            Text(client.settings.unavailableAction == .allow
+                                 ? "Applies when VayuSetu is closed, has not opened yet after you sign in, or has lost its link to the filter. Connections no rule covers go through, so nothing stops working, and each is listed with the reason so you can review it. Your rules and block lists still apply."
+                                 : "Applies when VayuSetu is closed, has not opened yet after you sign in, or has lost its link to the filter. Connections no rule covers are stopped and listed with the reason. Expect some apps to fail to connect until VayuSetu is open, for example just after you sign in. Your rules, block lists and Apple-signed software that you allow still apply.").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             Toggle("Automatically use the default after a timeout", isOn: Binding(get: { client.settings.automaticAskResolution }, set: { var s = client.settings; s.automaticAskResolution = $0; client.update(settings: s) })).font(.system(size: 12))
                             if client.settings.automaticAskResolution {
                                 Stepper("Wait \(client.settings.askTimeout) seconds for an answer", value: Binding(get: { client.settings.askTimeout }, set: { var s = client.settings; s.askTimeout = $0; client.update(settings: s) }), in: 5...120, step: 5).font(.system(size: 12))
@@ -558,18 +675,20 @@ struct MacNetwork: View {
             }
             MacPanel("Add a rule", icon: "plus.circle") {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
+                    MacWrap {
                         Picker("App", selection: $newRule.app) {
                             Text("Every app").tag("*")
                             ForEach(apps.prefix(100), id: \.app) { Text($0.name).tag($0.app) }
                         }.frame(width: 240)
-                        TextField("Destination (example.com, *.example.com, 10.0.0.0/8, or *)", text: $newRule.host).textFieldStyle(.roundedBorder)
+                        TextField("Destination (example.com, *.example.com, 10.0.0.0/8, or *)", text: $newRule.host).textFieldStyle(.roundedBorder).frame(minWidth: 260)
+                    }
+                    HStack(spacing: 10) {
                         TextField("Port", text: $newRule.port).textFieldStyle(.roundedBorder).frame(width: 70)
                         Picker("", selection: $newRule.action) { Text("Block").tag(NetAction.block); Text("Allow").tag(NetAction.allow) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
                         Picker("", selection: Binding(get: { newRule.direction ?? .any }, set: { newRule.direction = $0 == .any ? nil : $0 })) { ForEach(NetDirection.allCases) { Text($0.title).tag($0) } }.labelsHidden().frame(width: 110)
                         Button("Add") { add() }.buttonStyle(MacHoverButtonStyle(prominent: true)).disabled(newRule.host.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
-                    HStack(spacing: 10) {
+                    MacWrap {
                         HStack(spacing: 4) {
                             TextField("Group", text: Binding(get: { newRule.group ?? "" }, set: { newRule.group = $0 })).textFieldStyle(.roundedBorder).frame(width: 140)
                             Menu { ForEach(groupNames, id: \.self) { name in Button(name) { newRule.group = name } } } label: { Image(systemName: "chevron.down") }.menuStyle(.borderlessButton).fixedSize()
@@ -583,7 +702,7 @@ struct MacNetwork: View {
                         Text("Constrain the rule to a signer or process lineage.").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     if scheduleOn {
-                        HStack(spacing: 10) {
+                        MacWrap {
                             ForEach([(2, "Mon"), (3, "Tue"), (4, "Wed"), (5, "Thu"), (6, "Fri"), (7, "Sat"), (1, "Sun")], id: \.0) { day in
                                 Toggle(day.1, isOn: Binding(get: { days.contains(day.0) }, set: { if $0 { days.insert(day.0) } else { days.remove(day.0) } })).toggleStyle(.button).controlSize(.small)
                             }
@@ -625,6 +744,32 @@ struct MacNetwork: View {
         if flow.port == "5353" { return true }
         let h = flow.remoteAddress ?? flow.host
         return h.hasPrefix("192.168.") || h.hasPrefix("10.") || h.hasPrefix("169.254.") || h.hasPrefix("fe80:") || h.hasPrefix("ff0") || h.hasPrefix("224.") || h.hasPrefix("239.") || h == "255.255.255.255"
+    }
+    /// Why a connection got its verdict, in a few words: the rule or list that decided it, or the mode.
+    private func reason(for flow: FlowRecord) -> String {
+        if let why = flow.reason { return why + " (" + (flow.verdict == .allow ? "allowed" : "blocked") + " by your setting)" }
+        if let list = flow.list { return "List: " + list }
+        if let id = flow.rule, let rule = client.rules.first(where: { $0.id == id }) {
+            let who = rule.app == "*" ? "any app" : rule.app
+            return "Rule: " + who + (rule.host == "*" ? "" : " → " + rule.host)
+        }
+        if flow.rule != nil { return "A rule that is gone now" }
+        switch client.settings.mode {
+        case .blockAll: return flow.verdict == .block ? "Block all mode" : "Allowed"
+        case .passive: return "Passive mode"
+        case .normal: return flow.verdict == .allow ? "No rule; default or your answer" : "Your answer or the default"
+        }
+    }
+    private static var iconCache: [String: NSImage] = [:]
+    /// The app's own icon, found from its identifier; a plain document icon when it cannot be found.
+    static func icon(for identifier: String) -> NSImage {
+        if let hit = iconCache[identifier] { return hit }
+        let image: NSImage
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) { image = NSWorkspace.shared.icon(forFile: url.path) }
+        else { image = NSWorkspace.shared.icon(for: .unixExecutable) }
+        if iconCache.count > 300 { iconCache.removeAll() }
+        iconCache[identifier] = image
+        return image
     }
     static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
@@ -690,12 +835,12 @@ struct MacNetwork: View {
                         }
                     }
                     Divider()
-                    HStack(spacing: 10) {
+                    MacWrap {
                         TextField("Name", text: $listName).textFieldStyle(.roundedBorder).frame(width: 200)
                         Picker("", selection: $listKind) { Text("Block").tag(NetAction.block); Text("Allow").tag(NetAction.allow) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
-                        TextField("https:// address to refresh from (optional)", text: $listSource).textFieldStyle(.roundedBorder)
+                        TextField("https:// address to refresh from (optional)", text: $listSource).textFieldStyle(.roundedBorder).frame(minWidth: 260)
                     }
-                    TextEditor(text: $listText).font(.system(size: 12, design: .monospaced)).frame(height: 90)
+                    TextEditor(text: $listText).font(.system(size: 12, design: .monospaced)).frame(height: 90).scrollIndicators(.hidden)
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.15)))
                     HStack {
                         Text("Paste names, addresses, wildcards (*.example.com) or address blocks, one per line. Hosts-file and ad-blocker (||name^) lines work too.").font(.system(size: 11)).foregroundStyle(.secondary)

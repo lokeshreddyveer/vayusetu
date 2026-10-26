@@ -12,6 +12,8 @@ struct MacDNS: View {
     @State private var draft: VSResolverDraft?
     @State private var search = ""
     @State private var removing = false
+    @State private var pendingDelete: DNSProfile?
+    @State private var hovered: UUID?
     @State private var path: [DNSRoute] = []
     private enum DNSRoute: Hashable { case modes, security, diagnostics, verification }
     init(store: AppStore, tunnel: TunnelController, activate: @escaping (@escaping () -> Void) -> Void) {
@@ -23,14 +25,31 @@ struct MacDNS: View {
 
     var body: some View {
         MacPage(title: "Encrypted DNS", subtitle: "Choose the resolver that answers your lookups. VayuSetu DNS also filters ads and trackers on this Mac.") {
-            HStack(alignment: .top, spacing: 20) {
-                resolvers.frame(width: 360)
-                VStack(spacing: 20) { current; test; activity; more }.frame(maxWidth: .infinity)
+            MacPanelLayout {
+                resolvers
+                current
+            }
+            suggestion
+            test
+            trust
+            activity
+            more
+        }
+        .task {
+            // Look again every few minutes while this page is open. Nothing runs unless the resolver has been failing, so most checks cost nothing.
+            while !Task.isCancelled {
+                let list = HealthAssessor.assess(rounds: WiFiMonitor.shared.rounds, resolver: nil, vpn: nil)
+                let healthy = WiFiMonitor.shared.running && list.first { $0.name == .wifiRouter }?.state == .good && list.first { $0.name == .internet }?.state == .good
+                await store.evaluateResolverSuggestion(connectionHealthy: healthy)
+                try? await Task.sleep(for: .seconds(180))
             }
         }
         .toolbar { ToolbarItem { Button { draft = VSResolverDraft(name: "", endpoint: "") } label: { Label("Add resolver", systemImage: "plus") }.disabled(locked).help("Add an encrypted DNS resolver") } }
         .sheet(item: $draft) { item in NavigationStack { VSResolverEditor(store: store, tunnel: tunnel, draft: item) }.frame(minWidth: 520, minHeight: 520).vsDialogHost() }
-        .vsConfirm(isPresented: $removing, title: "Delete this resolver?", message: "The resolver and its saved VPN configuration are removed. Other profiles are preserved.", confirm: "Delete resolver", destructive: true, icon: "trash.fill") { Task { _ = await store.forgetEndpoint() } }
+        .vsConfirm(isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                   title: "Delete \(pendingDelete?.name ?? "this resolver")?", message: "The resolver is removed from this Mac. Other resolvers are kept.", confirm: "Delete resolver", destructive: true, icon: "trash.fill") {
+            if let item = pendingDelete { pendingDelete = nil; Task { _ = await store.deleteResolver(item.id) } }
+        }
     }
 
     // MARK: Resolvers
@@ -54,7 +73,19 @@ struct MacDNS: View {
                         }.padding(8).contentShape(Rectangle())
                             .background(on ? VSDesign.accent.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }.buttonStyle(.plain).disabled(locked && !on)
-                        .contextMenu { Button("Use this resolver") { store.loadDNS(resolver) }.disabled(locked); Button("Edit…") { edit(resolver) }.disabled(locked) }
+                        .overlay(alignment: .trailing) {
+                            if resolver.id != VayuSetuDNS.id, hovered == resolver.id {
+                                Button { pendingDelete = resolver } label: { Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(store.resolverInUse(resolver.id) ? Color.secondary : Color.red).padding(8) }
+                                    .buttonStyle(.plain).help(store.resolverInUse(resolver.id) ? "In use. Turn DNS off to delete it." : "Delete this resolver")
+                                    .disabled(store.resolverInUse(resolver.id)).transition(.opacity)
+                            }
+                        }
+                        .onHover { inside in withAnimation(.easeInOut(duration: 0.15)) { hovered = inside ? resolver.id : (hovered == resolver.id ? nil : hovered) } }
+                        .contextMenu {
+                            Button("Use this resolver") { store.loadDNS(resolver) }.disabled(locked)
+                            Button("Edit…") { edit(resolver) }.disabled(locked)
+                            if resolver.id != VayuSetuDNS.id { Divider(); Button("Delete…", role: .destructive) { pendingDelete = resolver }.disabled(store.resolverInUse(resolver.id)) }
+                        }
                 }
                 if store.dnsProfiles.isEmpty { Text("Add your provider's encrypted DNS endpoint, for example from NextDNS or Control D.").font(.system(size: 12)).foregroundStyle(.secondary) }
                 else if matching.isEmpty { Text("No resolver matches “\(search)”.").font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -77,7 +108,12 @@ struct MacDNS: View {
                     }
                     HStack(spacing: 10) {
                         Button { edit(store.dnsProfiles.first { $0.id == store.selectedDNS }) } label: { Label("Edit", systemImage: "pencil") }.buttonStyle(MacHoverButtonStyle()).disabled(locked)
-                        if store.selectedDNS != VayuSetuDNS.id { Button(role: .destructive) { removing = true } label: { Label("Delete", systemImage: "trash") }.buttonStyle(MacHoverButtonStyle()).disabled(locked) }
+                        if let id = store.selectedDNS, id != VayuSetuDNS.id, let profile = store.dnsProfiles.first(where: { $0.id == id }) {
+                            Button(role: .destructive) { pendingDelete = profile } label: { Label("Delete", systemImage: "trash") }.buttonStyle(MacHoverButtonStyle()).disabled(store.resolverInUse(id))
+                        }
+                    }
+                    if let id = store.selectedDNS, id != VayuSetuDNS.id, store.resolverInUse(id) {
+                        Text("This resolver is in use. Turn DNS off to delete it, or pick another resolver first.").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -89,6 +125,35 @@ struct MacDNS: View {
         GridRow { Text(title).font(.system(size: 12)).foregroundStyle(.secondary).gridColumnAlignment(.trailing); Text(value).font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading) }
     }
 
+    /// Shown only when the resolver in use has really been failing while the network was fine. It never switches anything.
+    @ViewBuilder private var suggestion: some View {
+        if let s = store.resolverSuggestion {
+            MacPanel("A resolver suggestion", icon: "lightbulb") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Consider \(s.candidate)").font(.system(size: 13, weight: .semibold))
+                    ForEach(s.reasons, id: \.self) { Label($0, systemImage: "checkmark.circle").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                    ForEach(s.caveats, id: \.self) { Label($0, systemImage: "info.circle").font(.system(size: 11)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true) }
+                    Text("To switch: disconnect, then choose it under Selected resolver.").font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
+            }.transition(.opacity)
+        }
+    }
+    private var trust: some View {
+        MacPanel("Check that answers are genuine", icon: "checkmark.shield", trailing: {
+            Button(store.resolverTrustRunning ? "Checking…" : "Check now") { Task { await store.runResolverTrust() } }.buttonStyle(MacHoverButtonStyle(prominent: true)).disabled(store.resolverTrustRunning)
+        }) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let report = store.resolverTrust {
+                    Label(report.verdict.title, systemImage: report.verdict == .consistent ? "checkmark.circle.fill" : (report.verdict == .inconclusive ? "questionmark.circle" : "exclamationmark.triangle.fill"))
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(report.verdict == .consistent ? Color.green : (report.verdict == .inconclusive ? Color.secondary : Color.orange))
+                    Text(report.summary).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Checked \(report.date.formatted(date: .omitted, time: .shortened)) through \(report.resolver).").font(.system(size: 11)).foregroundStyle(.tertiary)
+                } else {
+                    Text("Asks for three well-known names whose addresses never change (Cloudflare, Google and Quad9's own) and compares what comes back. If your resolver or network rewrites answers, they will not match. It sends three lookups through the resolver you use and nothing to anyone else. A name your resolver blocks on purpose is not treated as tampering.").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
     private var test: some View {
         MacPanel("Test the resolver", icon: "checkmark.circle", trailing: {
             Button(store.testing ? "Testing…" : "Test now") { store.testDNS() }.buttonStyle(MacHoverButtonStyle(prominent: true)).disabled(store.endpoint.isEmpty || store.testing)
@@ -106,8 +171,10 @@ struct MacDNS: View {
     }
     private var activity: some View {
         VStack(spacing: 20) {
-            MacPanel("Recent lookups", icon: "list.bullet.rectangle") { VSLookupsPanel(tunnel: tunnel) }
+            MacLiveGate(tunnel: tunnel, history: DomainHistoryStore.shared)
             MacPanel("DNS activity", icon: "chart.xyaxis.line") { VSActivityDashboard(filtering: store.filtering).padding(.horizontal, -4) }
+            MacDomainPanel(tunnel: tunnel, history: DomainHistoryStore.shared)
+            MacPanel("Recent lookups", icon: "list.bullet.rectangle") { VSLookupsPanel(tunnel: tunnel) }
         }
     }
     private var more: some View {
