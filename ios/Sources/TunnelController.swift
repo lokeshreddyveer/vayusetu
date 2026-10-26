@@ -304,7 +304,13 @@ import AppKit
             case .disconnected, .invalid:
                 finishSession(totals: finalCounters); sampleTask?.cancel()
                 stage = .disconnected
-                if wantedConnection { scheduleRetry() }
+                if wantedConnection {
+                    // This start attempt is over, so its deadline is too: left running it would report a missed deadline long after the real
+                    // outcome and under the wrong cause.
+                    watchdog?.cancel()
+                    scheduleRetry()
+                    if previous == .connecting || previous == .reasserting, wantedConnection, retryTask == nil { failStartAttempt() }
+                }
             default: break
             }
             // The first read after launch is the baseline, not a transition worth logging.
@@ -966,6 +972,14 @@ import AppKit
             self.manager?.connection.stopVPNTunnel(); self.refreshStatus(); self.scheduleRetry()
             if !self.autoReconnect { self.wantedConnection = false; self.stage = .failed; self.message = "Connection deadline exceeded." }
         }
+    }
+    /// The tunnel stopped while starting and no reconnect is coming (reconnecting is off, or the network is down): say so now instead of waiting for
+    /// a deadline. It is reported as a failure, never as a connection.
+    private func failStartAttempt() {
+        wantedConnection = false; stage = .failed
+        let reason = autoReconnect ? "The network was not available to reconnect." : "Automatic reconnect is off."
+        message = "The tunnel stopped while starting. " + reason + " Connect again to retry."   // the system's own error text, when it arrives, replaces this
+        record("Start attempt failed: the tunnel stopped before it was established; no reconnect scheduled", severity: .warning)
     }
     private func scheduleRetry() {
         guard !busy, wantedConnection, autoReconnect, pathAvailable, retryTask == nil else { return }

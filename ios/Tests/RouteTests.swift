@@ -126,6 +126,30 @@ import NetworkExtension
         let began = Date()
         do { _ = try ResolverBootstrap.resolve(host: "slow.test", timeout: 0.02, lookup: { _ in Thread.sleep(forTimeInterval: 0.2); return ["1.1.1.1"] }); fatalError("Unbounded lookup") } catch { checks += 1 }
         require(Date().timeIntervalSince(began) < 0.15, "bootstrap timeout bounds startup wait")
+        // Resilient resolution: bounded tries with growing pauses, a path check between tries, saved addresses only as a last, recent resort.
+        do {
+            let cache = ResolverBootstrap.Cache(); var pauses: [TimeInterval] = []; var calls = 0; var clock = Date(timeIntervalSince1970: 1_000_000)
+            let policy = ResolverBootstrap.RetryPolicy()
+            let up = try ResolverBootstrap.resolveResilient(host: "settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in calls += 1; if calls < 3 { throw AppIssue(message: "not yet") }; return ["1.1.1.1"] },
+                                                           pathSatisfied: { true }, pause: { pauses.append($0) })
+            require(up.addresses == ["1.1.1.1"] && up.source == .live(attempt: 3) && pauses == [0.5, 1], "bootstrap succeeds on the third try after pausing 0.5 s then 1 s")
+            clock = clock.addingTimeInterval(3600); calls = 0; pauses = []
+            let kept = try ResolverBootstrap.resolveResilient(host: "Settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in calls += 1; throw AppIssue(message: "down") },
+                                                             pathSatisfied: { true }, pause: { pauses.append($0) })
+            require(kept.addresses == ["1.1.1.1"] && kept.source == .cached(age: 3600) && calls == policy.attempts, "saved addresses used only after every live try failed")
+            require(pauses.reduce(0, +) <= 3.5, "waiting between tries is bounded: \(pauses.reduce(0, +)) s")
+            clock = clock.addingTimeInterval(7 * 3600)
+            do { _ = try ResolverBootstrap.resolveResilient(host: "settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { true }, pause: { _ in }); fatalError("Expired saved addresses used") }
+            catch { checks += 1; require((error as? AppIssue)?.message.contains("4 tries") == true, "failure after expiry says how many tries were made") }
+            var waits = 0
+            do { _ = try ResolverBootstrap.resolveResilient(host: "never.test", policy: policy, cache: ResolverBootstrap.Cache(), lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { false }, pause: { _ in waits += 1 }); fatalError("Unresolvable host resolved") }
+            catch { checks += 1; require((error as? AppIssue)?.message.contains("network was unavailable") == true, "failure reports that the network path was down") }
+            require(waits <= 3 + 3 * 12, "path waiting is bounded: \(waits) pauses")
+            let literalHost = try ResolverBootstrap.resolveResilient(host: "9.9.9.9", cache: ResolverBootstrap.Cache(), lookup: { _ in fatalError("Literal looked up") }, pathSatisfied: { false }, pause: { _ in fatalError("Literal waited") })
+            require(literalHost.addresses == ["9.9.9.9"], "literal address never waits or looks up")
+            let poisoned = ResolverBootstrap.Cache(); poisoned.store("bad.test", ["127.0.0.1"], at: Date())
+            require(poisoned.recent("bad.test", now: Date(), maximumAge: 60) == nil, "saved addresses are re-validated before use")
+        }
         do { _ = try ResolverBootstrap.resolve(host: "blocked.test", lookup: { _ in ["0.0.0.0"] }); fatalError("Sinkhole accepted") } catch { checks += 1 }
         do { _ = try ResolverBootstrap.resolve(host: "failure.test", lookup: { _ in throw AppIssue(message: "test") }); fatalError("Lookup error ignored") } catch { checks += 1 }
         let strictSecret = TunnelSecret(wireguard: "test", resolver: resolver.absoluteString, mode: .vpnFirst, resolverBootstrapAddresses: ["1.1.1.1"], requireStrictRouting: true)

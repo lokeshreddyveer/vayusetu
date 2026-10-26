@@ -465,13 +465,20 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         try? database.addActivity(bucket: Int(Date().timeIntervalSince1970 / 600), requests: Int(max(requests, UInt64(b))), blocked: b, threats: Int(min(threats, UInt64(b))))
         statsRevision += 1
     }
+    /// Screens ask for this from their body, so it can run many times a second; the database read behind it is kept for half a minute and dropped
+    /// whenever the statistics change or a different period or custom range is asked for.
+    private var cachedSeries: (key: String, series: ActivitySeries)?
     func activitySeries(_ period: ActivityPeriod, now: Date = .now) -> ActivitySeries {
         _ = statsRevision
         let calendar = Calendar.current
         let custom = ActivityPeriodStore.customRange
+        let key = "\(period)|\(statsRevision)|\(Int(now.timeIntervalSince1970 / 30))|\(custom?.lowerBound.timeIntervalSince1970 ?? 0)|\(custom?.upperBound.timeIntervalSince1970 ?? 0)"
+        if let cached = cachedSeries, cached.key == key { return cached.series }
         let start = period == .custom ? custom.map { calendar.startOfDay(for: $0.lowerBound) } : period.start(now: now, calendar: calendar)
         let rows = database?.activity(fromBucket: Int((start?.timeIntervalSince1970 ?? 0) / 600)) ?? []
-        return ActivitySeries.make(period: period, rows: rows, now: now, calendar: calendar, custom: custom)
+        let series = ActivitySeries.make(period: period, rows: rows, now: now, calendar: calendar, custom: custom)
+        cachedSeries = (key, series)
+        return series
     }
     func clearActivity() { try? database?.clearActivity(); statsRevision += 1 }
     // MARK: Adblock test history

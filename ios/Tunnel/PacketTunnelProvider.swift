@@ -1,4 +1,5 @@
 import Foundation
+import os
 import NetworkExtension
 import Network
 
@@ -65,7 +66,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     resolver = validated
                     phase = .resolverBootstrap; TunnelStartupEvent.record(phase)
                     if let supplied = secret.resolverBootstrapAddresses, !supplied.isEmpty { addresses = try ResolverBootstrap.validated(supplied) }
-                    else { addresses = try ResolverBootstrap.resolve(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
+                    else { addresses = try Self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
                 }
                 // VayuSetu DNS: stage (or clear) the Go-side DNS filter before WireGuard starts; it wraps the tun device.
                 let filterOn = applyResolver && secret.filtering == true
@@ -92,12 +93,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    /// Resolves the resolver’s name with retries and path checks. Addresses from an earlier lookup in this process are used only after live lookups
+    /// failed, and that is written to the log so a start that relied on them can be told apart from one that did not.
+    private static func bootstrap(host: String) throws -> [String] {
+        let result = try ResolverBootstrap.resolveResilient(host: host)
+        let log = Logger(subsystem: "app.vayusetu.tunnel", category: "startup")
+        switch result.source {
+        case .live(let attempt) where attempt > 1: log.notice("startup resolverBootstrap succeeded on try \(attempt, privacy: .public)")
+        case .cached(let age): log.notice("startup resolverBootstrap used saved addresses, \(Int(age), privacy: .public) s old, because live lookups failed")
+        default: break
+        }
+        return result.addresses
+    }
+
     /// The optional backup resolver and its bootstrap addresses. A problem with the backup is never allowed to stop the tunnel.
     private func fallback(_ secret: TunnelSecret) -> (url: URL, addresses: [String])? {
         guard let text = secret.fallbackResolver, let url = try? DNSService.endpoint(text), let host = url.host else { return nil }
         let addresses: [String]?
         if let supplied = secret.fallbackBootstrapAddresses, !supplied.isEmpty { addresses = try? ResolverBootstrap.validated(supplied) }
-        else { addresses = try? ResolverBootstrap.resolve(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
+        else { addresses = try? Self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
         guard let addresses, !addresses.isEmpty else { return nil }
         return (url, addresses)
     }
@@ -111,7 +125,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // Resolved before the tunnel exists; afterwards the system resolver is this tunnel itself.
         let addresses: [String]
         if let supplied = secret.resolverBootstrapAddresses, !supplied.isEmpty { addresses = try ResolverBootstrap.validated(supplied) }
-        else { addresses = try ResolverBootstrap.resolve(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
+        else { addresses = try Self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) }
         // Validated by the same rules as before, then handed to the shared Go client (HTTP/2, DoT, bootstrap dialing).
         _ = try DNSUpstreamConfiguration(endpoint: resolver, addresses: addresses)
         var upstream: any DNSUpstreaming = try GoDNSUpstream(resolver: resolver, bootstrap: addresses)

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import NetworkExtension
 import Security
 
@@ -96,6 +97,67 @@ enum ResolverBootstrap {
     private final class BootstrapResult {
         let condition = NSCondition()
         var value: Result<[String], Error>?
+    }
+
+    // MARK: Resolution that survives a network that is still settling
+    // A tunnel is often asked to start in the moment the network is changing (right after another tunnel stopped, on a wake, on a Wi‑Fi switch). One
+    // five-second lookup then fails the whole start. This tries a bounded number of times with growing pauses and checks the network path between
+    // tries, and only as a last step reuses addresses this process resolved earlier, while they are still recent.
+    struct RetryPolicy {
+        var attemptTimeout: TimeInterval = 3
+        var delays: [TimeInterval] = [0.5, 1, 2]                 // pause before the 2nd, 3rd and 4th try: the whole wait is at most about 16 s
+        var maximumCacheAge: TimeInterval = 6 * 3600
+        var attempts: Int { delays.count + 1 }
+    }
+    enum Source: Equatable { case live(attempt: Int), cached(age: TimeInterval) }
+    /// Addresses a host resolved to earlier in this process. Only used after live lookups failed, only while recent, and always re-validated.
+    final class Cache {
+        private let lock = NSLock(); private var entries: [String: (addresses: [String], date: Date)] = [:]
+        func store(_ host: String, _ addresses: [String], at date: Date) { lock.lock(); entries[host.lowercased()] = (addresses, date); lock.unlock() }
+        func recent(_ host: String, now: Date, maximumAge: TimeInterval) -> (addresses: [String], age: TimeInterval)? {
+            lock.lock(); defer { lock.unlock() }
+            guard let entry = entries[host.lowercased()] else { return nil }
+            let age = now.timeIntervalSince(entry.date)
+            guard age >= 0, age <= maximumAge, let checked = try? validated(entry.addresses) else { return nil }
+            return (checked, age)
+        }
+        func clear() { lock.lock(); entries = [:]; lock.unlock() }
+    }
+    static let sharedCache = Cache()
+
+    /// Whether the system currently reports a usable network path. A short-lived monitor; when it does not answer in time the answer is "yes", because
+    /// the lookup itself is the real test and a missing answer must not block a start.
+    static func networkPathSatisfied() -> Bool {
+        final class Box: @unchecked Sendable { let lock = NSLock(); var value = true }
+        let box = Box(), monitor = NWPathMonitor(), answered = DispatchSemaphore(value: 0)
+        monitor.pathUpdateHandler = { path in box.lock.lock(); box.value = path.status == .satisfied; box.lock.unlock(); answered.signal() }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+        let got = answered.wait(timeout: .now() + 0.5) == .success
+        monitor.cancel()
+        box.lock.lock(); defer { box.lock.unlock() }
+        return got ? box.value : true
+    }
+
+    static func resolveResilient(host: String, policy: RetryPolicy = RetryPolicy(), cache: Cache = sharedCache, now: () -> Date = Date.init,
+                                 lookup: @escaping (String) throws -> [String] = systemLookup, pathSatisfied: () -> Bool = networkPathSatisfied,
+                                 pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
+        if ProfileParser.ipFamily(host) != nil { return (try validated([host]), .live(attempt: 1)) }
+        var lastIssue = "no answer"; var pathWasDown = false
+        for attempt in 1...policy.attempts {
+            if attempt > 1 {
+                pause(policy.delays[attempt - 2])
+                // Give the path one more short chance to come back before spending a lookup on it.
+                var waited = 0.0
+                while !pathSatisfied() && waited < policy.attemptTimeout { pathWasDown = true; pause(0.25); waited += 0.25 }
+            }
+            do {
+                let found = try resolve(host: host, timeout: policy.attemptTimeout, lookup: lookup)
+                cache.store(host, found, at: now())
+                return (found, .live(attempt: attempt))
+            } catch { lastIssue = (error as? AppIssue)?.message ?? "lookup failed" }
+        }
+        if let kept = cache.recent(host, now: now(), maximumAge: policy.maximumCacheAge) { return (kept.addresses, .cached(age: kept.age)) }
+        throw AppIssue(message: "Resolver bootstrap failed after \(policy.attempts) tries" + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
     }
     private static func systemLookup(_ host: String) throws -> [String] {
         var hints = addrinfo(); hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG

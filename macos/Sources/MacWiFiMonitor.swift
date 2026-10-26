@@ -350,7 +350,7 @@ enum WiFiProbe {
     // MARK: One round
     private func tick() async {
         let now = Date()
-        let radio = Self.readRadio(now: now)
+        let radio = await Self.readRadioOffMain(now: now)   // CoreWLAN answers over XPC; asking on the main thread stalls the interface for as long as it takes
         if let previous = readings.last, previous.associated, radio.associated, let a = previous.bssid, let b = radio.bssid, a != b {
             roams.insert(RoamEvent(date: now, from: previous.rssi, to: radio.rssi), at: 0); if roams.count > 100 { roams.removeLast(roams.count - 100) }
             NetLab.shared.note("roam", "Moved to another access point" + (previous.rssi.flatMap { a in radio.rssi.map { b in " (signal \(a) → \(b) dBm)" } } ?? "") + ".")
@@ -359,7 +359,9 @@ enum WiFiProbe {
             if previous.associated && !radio.associated { resetIdentity() }
             if let a = previous.ssid, let b = radio.ssid, a != b { resetIdentity() }
         }
-        reading = radio; readings.append(radio); if readings.count > Self.keepRounds { readings.removeFirst(readings.count - Self.keepRounds) }
+        // Published only when something about the link changed; every round used to redraw every screen watching the monitor for a new timestamp alone.
+        if let shown = reading { var same = shown; same.date = radio.date; if same != radio { reading = radio } } else { reading = radio }
+        readings.append(radio); if readings.count > Self.keepRounds { readings.removeFirst(readings.count - Self.keepRounds) }
         if let rssi = radio.rssi { signalHistory.append(SignalPoint(date: now, rssi: rssi)); if signalHistory.count > Self.keepRounds { signalHistory.removeFirst(signalHistory.count - Self.keepRounds) } }
         let vpn = vpnActive()
         if vpn != lastVPN {
@@ -369,7 +371,7 @@ enum WiFiProbe {
         sequence &+= 1
         let seq = sequence
         let gateway = WiFiProbe.gateway()
-        gatewayAddressKnown = gateway != nil
+        if gatewayAddressKnown != (gateway != nil) { gatewayAddressKnown = gateway != nil }
         let wantDNS = !dnsBusy && Int(seq) % 3 == 0 && radio.associated
         if wantDNS { dnsBusy = true }
         async let router = Self.run { gateway.map { WiFiProbe.ping($0, sequence: seq) } ?? .unavailable }
@@ -384,7 +386,8 @@ enum WiFiProbe {
         // No route at all, or a router address that was there a moment ago and is gone, is an outage and has to be recorded as one.
         if case .unavailable = gw, gateway == nil, gatewayKey != nil { round.gatewayAnswered = false }
         if case .unavailable = net, !path.satisfied { round.internetAnswered = false }
-        if case .unavailable = gw, gateway != nil { unavailableNote = "This Mac does not allow the router probe." } else if gateway == nil, radio.associated { unavailableNote = "No router address was found." } else { unavailableNote = nil }
+        let note: String? = { if case .unavailable = gw, gateway != nil { return "This Mac does not allow the router probe." }; return gateway == nil && radio.associated ? "No router address was found." : nil }()
+        if unavailableNote != note { unavailableNote = note }
         gatewayKey = gateway
         if let gateway, now.timeIntervalSince(lastIdentityCheck) > 60 { lastIdentityCheck = now; Task { await self.checkIdentity(gateway: gateway) } }
         roundsSinceBaseline += 1
@@ -395,14 +398,15 @@ enum WiFiProbe {
                 baselines[key] = Baselines.update(baselines[key], median: median); saveBaselines()
             }
             let recentGateway = rounds.suffix(5).compactMap { $0.gatewayMs }.sorted()
-            baselineRemark = Baselines.remark(known: baselines[key], nowMs: recentGateway.isEmpty ? nil : recentGateway[recentGateway.count / 2])
-        } else { baselineRemark = nil }
+            let remark = Baselines.remark(known: baselines[key], nowMs: recentGateway.isEmpty ? nil : recentGateway[recentGateway.count / 2])
+            if baselineRemark != remark { baselineRemark = remark }
+        } else if baselineRemark != nil { baselineRemark = nil }
         rounds.append(round); if rounds.count > Self.keepRounds { rounds.removeFirst(rounds.count - Self.keepRounds) }
         QualityHistory.record(round, into: &days, today: DomainHistory.day(for: now), hour: Calendar.current.component(.hour, from: now))
         roundsSinceSave += 1; if roundsSinceSave >= 20 { roundsSinceSave = 0; saveQuality() }
         let before = detector.state
         let outcome = detector.record(round, baselineMs: baselineMs)
-        state = detector.state
+        if state != detector.state { state = detector.state }
         if state != .healthy { lastTrouble = now }
         if before == .healthy, detector.state == .suspected { beforeReading = readings.dropLast().last ?? radio }
         if outcome.opened {
@@ -418,6 +422,9 @@ enum WiFiProbe {
         ledger.advance(now: now)
     }
 
+    private static func readRadioOffMain(now: Date) async -> WiFiReading {
+        await withCheckedContinuation { continuation in DispatchQueue.global(qos: .utility).async { continuation.resume(returning: readRadio(now: now)) } }
+    }
     private static func run(_ work: @escaping @Sendable () -> WiFiProbe.Reply) async -> WiFiProbe.Reply {
         await withCheckedContinuation { continuation in DispatchQueue.global(qos: .utility).async { continuation.resume(returning: work()) } }
     }
