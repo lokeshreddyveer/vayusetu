@@ -49,7 +49,6 @@ enum RoutePolicy {
 
 /// Provider addresses avoid a pre-tunnel system DNS lookup. They never add excluded routes.
 enum ResolverBootstrap {
-    private static let workers = DispatchSemaphore(value: 2)
     static func validated(_ addresses: [String]) throws -> [String] {
         guard !addresses.isEmpty, addresses.count <= 8 else { throw AppIssue(message: "Use between 1 and 8 resolver bootstrap addresses.") }
         var result: [String] = []
@@ -76,27 +75,127 @@ enum ResolverBootstrap {
             return !b.prefix(12).allSatisfy({ $0 == 0 })
         }
     }
-    static func resolve(host: String, timeout: TimeInterval = 5, lookup: @escaping (String) throws -> [String] = systemLookup) throws -> [String] {
+    // MARK: One lookup that can be given up on
+    /// Starts one system lookup and returns the function that stops it. The completion may run on any queue, at most once, and not at all after the stop.
+    typealias Starter = (_ host: String, _ completion: @escaping (Result<[String], Error>) -> Void) -> (() -> Void)
+
+    /// The attempts allowed in flight at once. A slot is taken when an attempt starts and given back exactly once on every way out of it (an answer, the
+    /// deadline, a cancellation), so an attempt that was given up on can never keep a slot from the next one.
+    final class Pool: @unchecked Sendable {
+        static let shared = Pool(limit: 4)
+        private let lock = NSLock(); private let limit: Int; private var used = 0
+        init(limit: Int) { self.limit = limit }
+        var inFlight: Int { lock.lock(); defer { lock.unlock() }; return used }
+        final class Lease: @unchecked Sendable {
+            private let pool: Pool; private let lock = NSLock(); private var released = false
+            fileprivate init(_ pool: Pool) { self.pool = pool }
+            func release() { lock.lock(); let first = !released; released = true; lock.unlock(); if first { pool.give() } }
+            deinit { release() }
+        }
+        func take() -> Lease? { lock.lock(); defer { lock.unlock() }; guard used < limit else { return nil }; used += 1; return Lease(self) }
+        fileprivate func give() { lock.lock(); used = max(0, used - 1); lock.unlock() }
+    }
+
+    /// What one attempt ended with, kept apart from every other attempt: an answer that arrives after its attempt was given up on lands here and nowhere else.
+    private final class Attempt: @unchecked Sendable {
+        let lock = NSLock(); let signal = DispatchSemaphore(value: 0)
+        var result: Result<[String], Error>?; var abandoned = false
+        func finish(_ value: Result<[String], Error>) {
+            lock.lock(); defer { lock.unlock() }
+            guard !abandoned, result == nil else { return }          // late or repeated: ignored
+            result = value; signal.signal()
+        }
+        /// Takes the answer if there is one, otherwise gives the attempt up so that nothing arriving later is used.
+        func settle() -> Result<[String], Error>? {
+            lock.lock(); defer { lock.unlock() }
+            if let result { return result }
+            abandoned = true; return nil
+        }
+    }
+    enum Failure: Error, Equatable { case lookup(String) }
+    static func describe(_ error: Error) -> String { if case Failure.lookup(let why) = error { return why }; return "lookup failed" }
+
+    /// One bounded, cancellable lookup. The deadline stops the query itself, not just the wait for it, and the slot is given back on every exit.
+    static func resolve(host: String, timeout: TimeInterval = 5, start: Starter = systemStart, pool: Pool = .shared, cancelled: () -> Bool = { false }) throws -> [String] {
         guard timeout > 0, timeout <= 10, !host.isEmpty, host.utf8.count <= 253 else { throw AppIssue(message: "Invalid resolver bootstrap request.") }
         if ProfileParser.ipFamily(host) != nil { return try validated([host]) }
-        guard workers.wait(timeout: .now()) == .success else { throw AppIssue(message: "Resolver bootstrap is busy. Retry shortly.") }
-        let state = BootstrapResult()
-        DispatchQueue.global(qos: .utility).async {
-            defer { workers.signal() }
-            let value = Result { try validated(lookup(host)) }
-            state.condition.lock(); state.value = value; state.condition.broadcast(); state.condition.unlock()
-        }
+        guard let lease = pool.take() else { throw AppIssue(message: "Resolver bootstrap is busy. Retry shortly.") }
+        defer { lease.release() }
+        let attempt = Attempt()
+        let stop = start(host) { attempt.finish($0) }
         let deadline = Date().addingTimeInterval(timeout)
-        state.condition.lock(); defer { state.condition.unlock() }
-        while state.value == nil {
-            if !state.condition.wait(until: deadline), state.value == nil { throw AppIssue(message: "Resolver bootstrap timed out. Use your provider’s bootstrap addresses or retry.") }
+        var outcome: Result<[String], Error>?
+        while true {
+            if cancelled() { break }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 { break }
+            if attempt.signal.wait(timeout: .now() + min(0.05, remaining)) == .success { break }
         }
-        guard let result = state.value else { throw AppIssue(message: "Resolver bootstrap finished without a result.") }
-        return try result.get()
+        outcome = attempt.settle()
+        guard let outcome else {
+            stop()
+            throw AppIssue(message: cancelled() ? "Resolver bootstrap was cancelled." : "Resolver bootstrap timed out. Use your provider\u{2019}s bootstrap addresses or retry.")
+        }
+        return try validated(outcome.get())
     }
-    private final class BootstrapResult {
-        let condition = NSCondition()
-        var value: Result<[String], Error>?
+    /// For callers that only have a blocking lookup (tests, tools). It cannot be stopped; the deadline and the slot still hold.
+    static func resolve(host: String, timeout: TimeInterval = 5, lookup: @escaping (String) throws -> [String]) throws -> [String] {
+        try resolve(host: host, timeout: timeout, start: blocking(lookup))
+    }
+    /// Wraps a lookup that can only block (tests, or a platform without the cancellable query). It cannot be stopped, so the thread is left to finish.
+    static func blocking(_ lookup: @escaping (String) throws -> [String]) -> Starter {
+        { host, completion in
+            DispatchQueue.global(qos: .utility).async { completion(Result { try lookup(host) }) }
+            return {}
+        }
+    }
+    /// The system resolver through DNSServiceGetAddrInfo, which can be stopped. Both address families are collected for a short moment after the first answer.
+    static func systemStart(_ host: String, _ completion: @escaping (Result<[String], Error>) -> Void) -> () -> Void {
+        final class Query: @unchecked Sendable {
+            let lock = NSLock(); let queue = DispatchQueue(label: "app.vayusetu.bootstrap-lookup", qos: .utility)
+            var ref: DNSServiceRef?; var addresses = Set<String>(); var done = false; var graceStarted = false
+            var retained: Unmanaged<Query>?                       // the reference the system callback context holds; dropped once, after the query is closed
+            let completion: (Result<[String], Error>) -> Void
+            init(_ completion: @escaping (Result<[String], Error>) -> Void) { self.completion = completion }
+            func close() { // on the query's own queue, after which no callback can follow
+                queue.async { [self] in
+                    lock.lock(); let r = ref; ref = nil; let held = retained; retained = nil; lock.unlock()
+                    if let r { DNSServiceRefDeallocate(r) }            // after this no callback can follow
+                    held?.release()
+                }
+            }
+            func deliver() {
+                lock.lock(); if done { lock.unlock(); return }; done = true
+                let found = Array(addresses.sorted().prefix(8)); lock.unlock()
+                close(); completion(found.isEmpty ? .failure(Failure.lookup("no usable address")) : .success(found))
+            }
+            func stop() { lock.lock(); done = true; lock.unlock(); close() }
+        }
+        let query = Query(completion)
+        let context = Unmanaged.passRetained(query)
+        query.retained = context
+        var ref: DNSServiceRef?
+        let callback: DNSServiceGetAddrInfoReply = { _, flags, _, error, _, address, _, context in
+            guard let context else { return }
+            let query = Unmanaged<Query>.fromOpaque(context).takeUnretainedValue()
+            guard error == kDNSServiceErr_NoError, flags & kDNSServiceFlagsAdd != 0, let address else { return }
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 else { return }
+            let text = String(cString: buffer)
+            guard ResolverBootstrap.usable(text) else { return }
+            query.lock.lock(); query.addresses.insert(text)
+            let first = !query.graceStarted; query.graceStarted = true; query.lock.unlock()
+            if first { query.queue.asyncAfter(deadline: .now() + 0.25) { query.deliver() } }   // let the other family arrive too
+        }
+        let status = DNSServiceGetAddrInfo(&ref, 0, 0, 0, host, callback, context.toOpaque())
+        guard status == kDNSServiceErr_NoError, let ref else {
+            query.lock.lock(); query.retained = nil; query.lock.unlock(); context.release()
+            DispatchQueue.global(qos: .utility).async { completion(.failure(Failure.lookup("the system resolver could not be asked (\(status))"))) }
+            return {}
+        }
+        query.lock.lock(); query.ref = ref; query.lock.unlock()
+        DNSServiceSetDispatchQueue(ref, query.queue)
+        return { query.stop() }
     }
 
     // MARK: Resolution that survives a network that is still settling
@@ -142,7 +241,12 @@ enum ResolverBootstrap {
     }
 
     static func resolveResilient(host: String, policy: RetryPolicy = RetryPolicy(), cache: Cache = sharedCache, now: () -> Date = Date.init,
-                                 lookup: @escaping (String) throws -> [String] = systemLookup, pathSatisfied: () -> Bool = networkPathSatisfied,
+                                 lookup: @escaping (String) throws -> [String], pathSatisfied: () -> Bool = networkPathSatisfied,
+                                 pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
+        try resolveResilient(host: host, policy: policy, cache: cache, now: now, start: blocking(lookup), pathSatisfied: pathSatisfied, pause: pause)
+    }
+    static func resolveResilient(host: String, policy: RetryPolicy = RetryPolicy(), cache: Cache = sharedCache, now: () -> Date = Date.init,
+                                 start: Starter = systemStart, pool: Pool = .shared, cancelled: () -> Bool = { false }, pathSatisfied: () -> Bool = networkPathSatisfied,
                                  pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
         if ProfileParser.ipFamily(host) != nil { return (try validated([host]), .live(attempt: 1)) }
         var lastIssue = "no answer"; var pathWasDown = false; var spent: TimeInterval = 0; var tries = 0
@@ -155,34 +259,21 @@ enum ResolverBootstrap {
                 while !pathSatisfied() && waited < policy.attemptTimeout && spent + 0.25 < policy.totalBudget { pathWasDown = true; pause(0.25); waited += 0.25; spent += 0.25 }
             }
             let remaining = policy.totalBudget - spent
+            if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
             if remaining < 0.5 { break }                                    // not enough budget left for a lookup worth making
             tries += 1
             let began = Date()
             do {
-                let found = try resolve(host: host, timeout: min(policy.attemptTimeout, remaining), lookup: lookup)
+                let found = try resolve(host: host, timeout: min(policy.attemptTimeout, remaining), start: start, pool: pool, cancelled: cancelled)
                 cache.store(host, found, at: now())
                 return (found, .live(attempt: attempt))
-            } catch { lastIssue = (error as? AppIssue)?.message ?? "lookup failed"; spent += Date().timeIntervalSince(began) }
+            } catch {
+                if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
+                lastIssue = (error as? AppIssue)?.message ?? Self.describe(error); spent += Date().timeIntervalSince(began)
+            }
         }
         if let kept = cache.recent(host, now: now(), maximumAge: policy.maximumCacheAge) { return (kept.addresses, .cached(age: kept.age)) }
         throw AppIssue(message: "Resolver bootstrap failed after \(tries) \(tries == 1 ? "try" : "tries")" + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
-    }
-    private static func systemLookup(_ host: String) throws -> [String] {
-        var hints = addrinfo(); hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG
-        var head: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, nil, &hints, &head) == 0, let first = head else { throw AppIssue(message: "Resolver bootstrap resolution failed.") }
-        defer { freeaddrinfo(first) }
-        var values = Set<String>(); var current: UnsafeMutablePointer<addrinfo>? = first
-        while let item = current {
-            var address = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(item.pointee.ai_addr, item.pointee.ai_addrlen, &address, socklen_t(address.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let value = String(cString: address)
-                if usable(value) { values.insert(value) }
-            }
-            current = item.pointee.ai_next
-        }
-        // Bound multihomed answers after validation, preserving both address families.
-        return Array(values.sorted().prefix(8))
     }
 }
 

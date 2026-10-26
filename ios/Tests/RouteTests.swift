@@ -154,6 +154,69 @@ import NetworkExtension
             do { _ = try ResolverBootstrap.resolveResilient(host: "full.test", cache: ResolverBootstrap.Cache(), lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { false }, pause: { allPauses += $0 }); fatalError("Unresolvable host resolved") }
             catch { checks += 1 }
             require(allPauses <= ResolverBootstrap.RetryPolicy().totalBudget + 0.001 && ResolverBootstrap.RetryPolicy().totalBudget < 10, "default budget stays inside the shortest connection deadline (10 s)")
+        // Cancellable lookups: a hung query is stopped, its slot comes back on every exit, and a late answer can touch nothing.
+        do {
+            final class Counter: @unchecked Sendable { let lock = NSLock(); var value = 0; func bump() { lock.lock(); value += 1; lock.unlock() } }
+            let pool = ResolverBootstrap.Pool(limit: 1)
+            let stopped = Counter()
+            let hung: ResolverBootstrap.Starter = { _, _ in { stopped.bump() } }       // never answers
+            let began = Date()
+            do { _ = try ResolverBootstrap.resolve(host: "hung.test", timeout: 0.2, start: hung, pool: pool); fatalError("Hung lookup returned") }
+            catch { checks += 1; require((error as? AppIssue)?.message.contains("timed out") == true, "hung lookup reports a timeout") }
+            require(Date().timeIntervalSince(began) < 0.6, "hung lookup is bounded by its deadline")
+            require(stopped.value == 1 && pool.inFlight == 0, "deadline stops the query once and gives the slot back")
+            // cancellation from outside ends the wait at once
+            let flag = Counter(); let cancelBegan = Date()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { flag.bump() }
+            do { _ = try ResolverBootstrap.resolve(host: "cancel.test", timeout: 5, start: hung, pool: pool, cancelled: { flag.value > 0 }); fatalError("Cancelled lookup returned") }
+            catch { checks += 1; require((error as? AppIssue)?.message.contains("cancelled") == true, "cancelled lookup says so") }
+            require(Date().timeIntervalSince(cancelBegan) < 1, "cancellation does not wait for the deadline")
+            require(stopped.value == 2 && pool.inFlight == 0, "cancellation stops the query and gives the slot back")
+            // many abandoned attempts in a row never exhaust a one-slot pool
+            var busy = 0
+            for _ in 0..<12 { do { _ = try ResolverBootstrap.resolve(host: "again.test", timeout: 0.03, start: hung, pool: pool) } catch { if (error as? AppIssue)?.message.contains("busy") == true { busy += 1 } } }
+            require(busy == 0 && pool.inFlight == 0 && stopped.value == 14, "twelve timed-out attempts never leave the pool busy")
+            // busy means an attempt really is in flight, and clears when it ends
+            let held = pool.take()
+            do { _ = try ResolverBootstrap.resolve(host: "busy.test", timeout: 0.1, start: hung, pool: pool); fatalError("Ran with no free slot") }
+            catch { checks += 1; require((error as? AppIssue)?.message.contains("busy") == true, "a full pool says busy") }
+            held?.release(); held?.release()
+            require(pool.inFlight == 0, "releasing a slot twice gives back one slot")
+            let answered = try ResolverBootstrap.resolve(host: "ok.test", timeout: 1, start: { _, done in done(.success(["1.1.1.1"])); return {} }, pool: pool)
+            require(answered == ["1.1.1.1"] && pool.inFlight == 0, "an answered lookup gives the slot back")
+            // a lookup whose answer fails validation is an error, not an address
+            do { _ = try ResolverBootstrap.resolve(host: "loop.test", timeout: 1, start: { _, done in done(.success(["127.0.0.1"])); return {} }, pool: pool); fatalError("Loopback accepted") }
+            catch { checks += 1 }
+            require(pool.inFlight == 0, "a rejected answer still gives the slot back")
+            // late completion: the first attempt is abandoned, the second answers, then the first answers too
+            var firstCompletion: ((Result<[String], Error>) -> Void)?
+            var starts = 0
+            let cache = ResolverBootstrap.Cache()
+            var tight = ResolverBootstrap.RetryPolicy(); tight.attemptTimeout = 0.05; tight.delays = [0]
+            let outcome = try ResolverBootstrap.resolveResilient(host: "late.test", policy: tight, cache: cache, start: { _, done in
+                starts += 1
+                if starts == 1 { firstCompletion = done; return {} }
+                done(.success(["9.9.9.9"])); return {}
+            }, pool: pool, pathSatisfied: { true }, pause: { _ in })
+            require(outcome.addresses == ["9.9.9.9"] && outcome.source == .live(attempt: 2), "second attempt answers on its own")
+            firstCompletion?(.success(["1.1.1.1"]))        // the abandoned first attempt answers late
+            Thread.sleep(forTimeInterval: 0.05)
+            require(cache.recent("late.test", now: Date(), maximumAge: 60)?.addresses == ["9.9.9.9"], "a late answer from an abandoned attempt changes nothing")
+            // no fallback to anything the profile did not name
+            let empty = ResolverBootstrap.Cache(); empty.store("other.test", ["8.8.8.8"], at: Date())
+            do { _ = try ResolverBootstrap.resolveResilient(host: "profile.test", cache: empty, start: { _, done in done(.failure(AppIssue(message: "down"))); return {} }, pool: pool, pathSatisfied: { true }, pause: { _ in }); fatalError("Fell back to another host's addresses") }
+            catch { checks += 1; let text = (error as? AppIssue)?.message ?? ""; require(text.contains("no recent addresses are saved") && !text.contains("8.8.8.8") && !text.contains("1.1.1.1"), "failure names no resolver it did not use") }
+            require(pool.inFlight == 0, "the slot count ends where it started")
+            // the real system query: stopping it right away leaves nothing running and no slot taken
+            let before = Date()
+            do { _ = try ResolverBootstrap.resolve(host: "bootstrap-test.invalid", timeout: 1, pool: pool); fatalError("Invalid name resolved") } catch { checks += 1 }
+            require(Date().timeIntervalSince(before) < 2 && pool.inFlight == 0, "the system query is bounded and releases its slot")
+            var lateSystem = 0
+            let stopSystem = ResolverBootstrap.systemStart("bootstrap-test.invalid") { _ in lateSystem += 1 }
+            stopSystem(); stopSystem()
+            Thread.sleep(forTimeInterval: 0.3)
+            require(lateSystem == 0, "a stopped system query never reports")
+        }
             let literalHost = try ResolverBootstrap.resolveResilient(host: "9.9.9.9", cache: ResolverBootstrap.Cache(), lookup: { _ in fatalError("Literal looked up") }, pathSatisfied: { false }, pause: { _ in fatalError("Literal waited") })
             require(literalHost.addresses == ["9.9.9.9"], "literal address never waits or looks up")
             let poisoned = ResolverBootstrap.Cache(); poisoned.store("bad.test", ["127.0.0.1"], at: Date())
