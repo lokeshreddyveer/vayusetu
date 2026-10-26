@@ -14,14 +14,15 @@ for arch in arm64 x86_64; do
 done
 xcrun lipo -create build/filter-arm64/VayuSetuFilter build/filter-x86_64/VayuSetuFilter -output "$ext/Contents/MacOS/VayuSetuFilter"
 python3 - "$ext" <<'PY'
-import plistlib, sys
+import json, plistlib, sys
 from pathlib import Path
 ext = Path(sys.argv[1])
+VERSION = json.loads(Path('scripts/version.json').read_text())   # the one place the Mac version lives
 team = 'X4MH29QNRS'
 info = {
     'CFBundleName': 'VayuSetu Network Filter', 'CFBundleDisplayName': 'VayuSetu Network Filter',
     'CFBundleIdentifier': 'app.vayusetu.macos.filter', 'CFBundleExecutable': 'VayuSetuFilter', 'CFBundlePackageType': 'SYSX',
-    'CFBundleVersion': '37', 'CFBundleShortVersionString': '1.0', 'LSMinimumSystemVersion': '14.0',
+    'CFBundleVersion': VERSION['filter'], 'CFBundleShortVersionString': VERSION['marketing'], 'LSMinimumSystemVersion': '14.0',
     'NSSystemExtensionUsageDescription': 'VayuSetu uses this network extension to show which apps connect where, and to block connections you choose.',
     'NetworkExtension': {'NEMachServiceName': team + '.app.vayusetu.filter.xpc',
                          'NEProviderClasses': {'com.apple.networkextension.filter-data': 'VayuSetuFilter.VayuFilterProvider'}},

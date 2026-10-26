@@ -1,15 +1,16 @@
 from pathlib import Path
+import json
 import plistlib
 import subprocess
-import re
 root=Path(__file__).resolve().parents[1]
-# bundle.py defines the version; a literal here drifted from it (0.5.0 vs 0.6.2).
-expected=re.search(r"'CFBundleShortVersionString':'([^']+)'",(Path(__file__).parent/'bundle.py').read_text()).group(1)
+# scripts/version.json defines the version for every script; a literal here drifted from it before (0.5.0 vs 0.6.2).
+VERSION=json.loads((Path(__file__).parent/'version.json').read_text())
+expected=VERSION['marketing']
 for name,exe in [('VayuSetu','VayuSetu'),('VayuSetuVPN','VayuSetuVPN')]:
  app=root/'dist'/(name+'.app')
  subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
  info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
- assert info['CFBundleShortVersionString']==expected, 'Bundle version differs from bundle.py'
+ assert info['CFBundleShortVersionString']==expected and info['CFBundleVersion']==VERSION['build'], 'Bundle version differs from scripts/version.json'
  assert set(subprocess.check_output(['lipo','-archs',str(app/'Contents/MacOS'/exe)]).decode().split())=={'arm64','x86_64'}
  assert (app/'Contents/Resources/AppIcon.icns').stat().st_size > 10000
  assert not (app/'Contents/embedded.provisionprofile').exists(), 'Local builds should remain unprovisioned'

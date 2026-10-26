@@ -23,6 +23,7 @@ for name,source,identifier in bundles:
  if name=='Host':info['VayuAppKeychainGroup']=app_private_group
  if name=='Host' and store_distribution: info['LSApplicationCategoryType']='public.app-category.utilities'
  if name=='Host':info['VayuAppGroup']=team+'.app.vayusetu.shared'
+ if name=='Host':info['NSLocationWhenInUseUsageDescription']='macOS only lets an app read the name of the Wi-Fi network you are on if it may use your location. VayuSetu uses the network name to apply the Wi-Fi rules you set. It never reads or stores where you are.'
  if name=='Tunnel':info['NetworkExtension']['NEMachServiceName']=team+'.'+bundle+'.tunnel'
  (config/(name+'.plist')).write_bytes(plistlib.dumps(info))
  ent={'com.apple.application-identifier':team+'.'+identifier,'com.apple.developer.team-identifier':team,'com.apple.developer.networking.networkextension':[network_entitlement],'keychain-access-groups':[group,app_private_group] if name=='Host' else [group]}

@@ -54,6 +54,7 @@ Path(root/'Filter.entitlements').write_bytes(plistlib.dumps({
 host = plistlib.loads(Path('build/auto-sign/Host.entitlements').read_bytes())
 ne = host.setdefault('com.apple.developer.networking.networkextension', [])
 if 'content-filter-provider-systemextension' not in ne: ne.append('content-filter-provider-systemextension')
+host['com.apple.security.personal-information.location'] = True   # lets Wi-Fi rules read the network name (macOS ties that to Location)
 groups = host.setdefault('com.apple.security.application-groups', [])
 if group not in groups: groups.append(group)
 Path(root/'Host.entitlements').write_bytes(plistlib.dumps(host))

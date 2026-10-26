@@ -1,0 +1,480 @@
+{
+  "build": "40",
+  "date": "2026-10-21T23:28:41",
+  "ended": "2026-10-21T23:22:29",
+  "environment": {
+    "cold_method": "random label under a real domain; either an answer or no-such-name counts as success",
+    "default_interface": "en0",
+    "dns_resolvers_configured": [
+      "h:a702f7af55",
+      "h:dbc798fee6",
+      "h:3a95905138"
+    ],
+    "extensions_active": [
+      "* * X4MH29QNRS app.vayusetu.macos.tunnel (1.0/40) VayuSetu Tunnel [activated enabled]",
+      "* * X4MH29QNRS app.vayusetu.macos.filter (1.0/44) VayuSetu Network Filter [activated enabled]"
+    ],
+    "git_commit": "06105fa",
+    "git_dirty_files": 48,
+    "git_dirty_sample": [
+      " M ios/Sources/App.swift",
+      " M ios/Sources/Secrets.swift",
+      " M ios/Sources/TunnelController.swift",
+      " M ios/Tests/DNSOnlyTests.swift",
+      " M ios/Tunnel/PacketTunnelProvider.swift",
+      " M ios/VayuSetu.xcodeproj/project.pbxproj"
+    ],
+    "network_kind": "Wi-Fi",
+    "other_extensions_active": [
+      "h:9167e8c7cd",
+      "h:461c7965a6",
+      "h:0e062dbbb4",
+      "h:c9c7f9a07e",
+      "h:94c494a8a3"
+    ],
+    "other_vpn_connected": [],
+    "vpn_endpoint_host": "h:c7afd9670e",
+    "vpn_profile": "h:29bb08377f",
+    "vpnonly_nameserver": "h:3c6d402841"
+  },
+  "evidence": {
+    "connect_both_s": [
+      {
+        "failure": null,
+        "run": 1,
+        "seconds": 1.875473976135254
+      },
+      {
+        "failure": null,
+        "run": 2,
+        "seconds": 1.4435808658599854
+      },
+      {
+        "failure": null,
+        "run": 3,
+        "seconds": 1.692732810974121
+      }
+    ],
+    "connect_dns_s": [
+      {
+        "failure": null,
+        "run": 1,
+        "seconds": 0.8860108852386475
+      },
+      {
+        "failure": null,
+        "run": 2,
+        "seconds": 0.7732439041137695
+      },
+      {
+        "failure": null,
+        "run": 3,
+        "seconds": 0.7491121292114258
+      }
+    ],
+    "connect_vpn_s": [
+      {
+        "failure": null,
+        "run": 1,
+        "seconds": 1.7066969871520996
+      },
+      {
+        "failure": null,
+        "run": 2,
+        "seconds": 1.6032400131225586
+      },
+      {
+        "failure": null,
+        "run": 3,
+        "seconds": 2.129732131958008
+      }
+    ],
+    "dns_both": [],
+    "dns_dnsonly": [],
+    "dns_vpnonly": [],
+    "stop_s": [
+      {
+        "failure": null,
+        "run": 1,
+        "seconds": 1.6937978267669678
+      },
+      {
+        "failure": null,
+        "run": 2,
+        "seconds": 0.9823999404907227
+      },
+      {
+        "failure": null,
+        "run": 3,
+        "seconds": 0.8276879787445068
+      }
+    ],
+    "switch_dns_to_both_s": [
+      {
+        "failure": null,
+        "run": 1,
+        "seconds": 3.248244047164917
+      },
+      {
+        "failure": null,
+        "run": 2,
+        "seconds": 2.397233247756958
+      },
+      {
+        "failure": null,
+        "run": 3,
+        "seconds": 6.962100028991699
+      }
+    ],
+    "tunnel_failure_lines": [],
+    "vpn_runs": [
+      {
+        "bytes": 53395402,
+        "cpu_avg_pct": 15.76923076923077,
+        "cpu_max_pct": 77.5,
+        "cpu_p95_pct": 77.5,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.000763,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 135.522,
+          "rtt_jitter_ms": 2.794,
+          "rtt_min_ms": 133.522
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 177.015,
+          "rtt_jitter_ms": 46.218,
+          "rtt_min_ms": 132.911
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 21.357346017249444,
+        "tunnel_bytes": 58480012,
+        "valid": true
+      },
+      {
+        "bytes": 7651310,
+        "cpu_avg_pct": 4.823076923076923,
+        "cpu_max_pct": 23.4,
+        "cpu_p95_pct": 23.4,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.001182,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 135.458,
+          "rtt_jitter_ms": 2.475,
+          "rtt_min_ms": 133.534
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 137.299,
+          "rtt_jitter_ms": 15.56,
+          "rtt_min_ms": 132.504
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 3.060343133720797,
+        "tunnel_bytes": 8397757,
+        "valid": true
+      },
+      {
+        "bytes": 41549788,
+        "cpu_avg_pct": 15.523076923076923,
+        "cpu_max_pct": 66.1,
+        "cpu_p95_pct": 66.1,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 19.999537,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 136.075,
+          "rtt_jitter_ms": 4.368,
+          "rtt_min_ms": 133.17
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 138.816,
+          "rtt_jitter_ms": 13.311,
+          "rtt_min_ms": 132.309
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 16.620299959944074,
+        "tunnel_bytes": 44981061,
+        "valid": true
+      },
+      {
+        "bytes": 24248320,
+        "cpu_avg_pct": 10.26923076923077,
+        "cpu_max_pct": 36.5,
+        "cpu_p95_pct": 36.5,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 19.999784,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 135.38,
+          "rtt_jitter_ms": 3.248,
+          "rtt_min_ms": 132.662
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 141.697,
+          "rtt_jitter_ms": 33.451,
+          "rtt_min_ms": 133.191
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 9.699432753873744,
+        "tunnel_bytes": 26935486,
+        "valid": true
+      },
+      {
+        "bytes": 32718830,
+        "cpu_avg_pct": 11.192307692307692,
+        "cpu_max_pct": 61.1,
+        "cpu_p95_pct": 61.1,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.001397,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 168.648,
+          "rtt_jitter_ms": 57.932,
+          "rtt_min_ms": 133.411
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 257.458,
+          "rtt_jitter_ms": 150.399,
+          "rtt_min_ms": 132.813
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 13.086617899739704,
+        "tunnel_bytes": 40492039,
+        "valid": true
+      },
+      {
+        "bytes": 13565952,
+        "cpu_avg_pct": 4.269230769230769,
+        "cpu_max_pct": 35.9,
+        "cpu_p95_pct": 35.9,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.001341,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 135.486,
+          "rtt_jitter_ms": 3.271,
+          "rtt_min_ms": 132.811
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 432.78,
+          "rtt_jitter_ms": 137.671,
+          "rtt_min_ms": 133.606
+        },
+        "mem_max_mb": 87.0,
+        "redirects": 0,
+        "throughput_mbps": 5.426016985561119,
+        "tunnel_bytes": 22439329,
+        "valid": true
+      },
+      {
+        "bytes": 18251776,
+        "cpu_avg_pct": 4.776923076923077,
+        "cpu_max_pct": 31.9,
+        "cpu_p95_pct": 31.9,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.001872,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 137.358,
+          "rtt_jitter_ms": 1.812,
+          "rtt_min_ms": 136.152
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 396.46,
+          "rtt_jitter_ms": 152.132,
+          "rtt_min_ms": 136.275
+        },
+        "mem_max_mb": 102.0,
+        "redirects": 0,
+        "throughput_mbps": 7.3000271174618065,
+        "tunnel_bytes": 25198012,
+        "valid": true
+      },
+      {
+        "bytes": 12288000,
+        "cpu_avg_pct": 4.938461538461539,
+        "cpu_max_pct": 28.3,
+        "cpu_p95_pct": 28.3,
+        "cpu_samples": 13,
+        "diag": {
+          "connected_at_end": true,
+          "nc": "* (Connected)      4B6E1D04-D044-440F-8CE2-66C0A46021CC VPN ",
+          "route_interface": "utun10",
+          "tunnel_pid": "50270"
+        },
+        "elapsed_s": 20.002521,
+        "http": 200,
+        "idle": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 137.082,
+          "rtt_jitter_ms": 1.244,
+          "rtt_min_ms": 135.038
+        },
+        "interface": "utun10",
+        "loaded": {
+          "loss_pct": 0.0,
+          "rtt_avg_ms": 393.53,
+          "rtt_jitter_ms": 182.187,
+          "rtt_min_ms": 135.514
+        },
+        "mem_max_mb": 102.0,
+        "redirects": 0,
+        "throughput_mbps": 4.914580517125816,
+        "tunnel_bytes": 19126551,
+        "valid": true
+      }
+    ]
+  },
+  "flap": false,
+  "host": "Mac16,12",
+  "merged_from": [
+    "session-A-build-40-fixed.json",
+    "session-B-build-40.json"
+  ],
+  "metrics": {
+    "app_exits": 0.0,
+    "connect_both_s": 1.6701043844223022,
+    "connect_dns_s": 0.7911399602890015,
+    "connect_vpn_s": 1.6718995571136475,
+    "diag_dns_vpnonly_cold_p50_ms": 138.00391699999892,
+    "diag_dns_vpnonly_cold_p95_ms": 216.75779149999386,
+    "diag_dns_vpnonly_success_pct": 100.0,
+    "diag_dns_vpnonly_warm_p50_ms": 132.78941700000502,
+    "dns_both_cold_p50_ms": 13.058520500003112,
+    "dns_both_cold_p95_ms": 50.80160399999656,
+    "dns_both_success_pct": 100.0,
+    "dns_both_warm_p50_ms": 0.6126040000005162,
+    "dns_dnsonly_cold_p50_ms": 12.61877099999964,
+    "dns_dnsonly_cold_p95_ms": 50.68331249999858,
+    "dns_dnsonly_success_pct": 100.0,
+    "dns_dnsonly_warm_p50_ms": 1.322458000000637,
+    "stop_s": 0.9103915691375732,
+    "switch_dns_to_both_s": 2.75756299495697,
+    "tunnel_failures": 0.0,
+    "tunnel_mem_mb": 101.5,
+    "vpn_cpu_avg_pct": 6.186538461538461,
+    "vpn_cpu_avg_spread_pct": 7.36923076923077,
+    "vpn_cpu_max_pct": 56.65,
+    "vpn_cpu_p95_pct": 32.425,
+    "vpn_loss_pct": 1.49375,
+    "vpn_rtt_idle_ms": 136.9685,
+    "vpn_rtt_loaded_ms": 308.555,
+    "vpn_throughput_mbps": 6.640028472192345,
+    "vpn_throughput_spread_mbps": 10.10509341515903,
+    "vpn_tunnel_mb": 22.86003975,
+    "vpn_valid_runs": 8.0
+  },
+  "notes": [
+    "battery: not measured on the Mac"
+  ],
+  "os": "27.0",
+  "provisional": false,
+  "restore_verified": true,
+  "runs": 3,
+  "schema": 3,
+  "sessions": 2,
+  "spread": {
+    "app_exits": 0,
+    "connect_both_s": 0.045256853103637695,
+    "connect_dns_s": 0.03579211235046387,
+    "connect_vpn_s": 0.0695948600769043,
+    "diag_dns_vpnonly_cold_p50_ms": 4.705666000020869,
+    "diag_dns_vpnonly_cold_p95_ms": 129.92608300000086,
+    "diag_dns_vpnonly_success_pct": 0.0,
+    "diag_dns_vpnonly_warm_p50_ms": 1.7964999999975362,
+    "dns_both_cold_p50_ms": 4.7192910000006805,
+    "dns_both_cold_p95_ms": 5.919458000001043,
+    "dns_both_success_pct": 0.0,
+    "dns_both_warm_p50_ms": 0.21179200000887022,
+    "dns_dnsonly_cold_p50_ms": 1.7628760000008015,
+    "dns_dnsonly_cold_p95_ms": 1.1102910000033717,
+    "dns_dnsonly_success_pct": 0.0,
+    "dns_dnsonly_warm_p50_ms": 0.19341599999478376,
+    "stop_s": 0.14401674270629883,
+    "switch_dns_to_both_s": 0.9813621044158936,
+    "tunnel_failures": 0,
+    "tunnel_mem_mb": 1.0,
+    "vpn_cpu_avg_pct": 2.834615384615385,
+    "vpn_cpu_avg_spread_pct": 8.26153846153846,
+    "vpn_cpu_max_pct": 41.7,
+    "vpn_cpu_p95_pct": 7.550000000000004,
+    "vpn_loss_pct": 2.9875,
+    "vpn_rtt_idle_ms": 2.3400000000000034,
+    "vpn_rtt_loaded_ms": 182.63700000000003,
+    "vpn_throughput_mbps": 3.7194029269508597,
+    "vpn_throughput_spread_mbps": 16.383818936739235,
+    "vpn_tunnel_mb": 6.413418500000002,
+    "vpn_valid_runs": 0
+  },
+  "started": "2026-10-21T23:17:24",
+  "vpn_seconds": 20
+}
