@@ -1,6 +1,7 @@
 from pathlib import Path
 import json,subprocess,hashlib,plistlib
 p=Path(__file__).resolve().parents[2];group='group.app.vayusetu.shared'
+VERSION=json.loads((Path(__file__).resolve().parents[1]/'Configuration/Version.json').read_text())   # the one place the iPhone version lives
 info={'CFBundleName':'VayuSetu Safari','CFBundleDisplayName':'VayuSetu','CFBundlePackageType':'XPC!','VayuAppGroup':group,'NSExtension':{'NSExtensionPointIdentifier':'com.apple.Safari.content-blocker','NSExtensionPrincipalClass':'$(PRODUCT_MODULE_NAME).ContentBlockerRequestHandler'}}
 (p/'Extensions/SafariContentBlocker/Info.plist').write_bytes(plistlib.dumps(info))
 (p/'Extensions/SafariContentBlocker/iOS.entitlements').write_bytes(plistlib.dumps({'com.apple.security.application-groups':[group]}))
@@ -42,9 +43,9 @@ for v in o.values():
    if isinstance(flags,str): flags=[flags]
    if '-lsqlite3' not in flags: flags.append('-lsqlite3')
    settings['OTHER_LDFLAGS']=flags
-   settings['CURRENT_PROJECT_VERSION']='18';settings['MARKETING_VERSION']='0.11.2'
+   settings['CURRENT_PROJECT_VERSION']=VERSION['build'];settings['MARKETING_VERSION']=VERSION['marketing']
   if settings.get('PRODUCT_BUNDLE_IDENTIFIER') in ['app.vayusetu.ios.safari','app.vayusetu.ios.tunnel']:
-   settings['CURRENT_PROJECT_VERSION']='18';settings['MARKETING_VERSION']='0.11.2'
+   settings['CURRENT_PROJECT_VERSION']=VERSION['build'];settings['MARKETING_VERSION']=VERSION['marketing']
 def encode(x):
  if isinstance(x,dict):return '{\n'+''.join(json.dumps(str(k))+' = '+encode(v)+';\n' for k,v in x.items())+'}'
  if isinstance(x,list):return '('+','.join(encode(v) for v in x)+')'

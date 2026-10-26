@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess, json, hashlib, copy
 path=Path('VayuSetu.xcodeproj/project.pbxproj')
+VERSION=json.loads((Path(__file__).resolve().parents[1]/'Configuration/Version.json').read_text())   # the one place the iPhone version lives
 p=json.loads(subprocess.check_output(['plutil','-convert','json','-o','-',str(path)]))
 o=p['objects']; root=o[p['rootObject']]
 def ident(label): return hashlib.sha1(('vayusetu-'+label).encode()).hexdigest()[:24].upper()
@@ -18,7 +19,7 @@ privacy=ref('privacy','Configuration/PrivacyInfo.xcprivacy','text.xml'); pb=buil
 if pb not in o['A00000000000000000000007']['files']: o['A00000000000000000000007']['files'].append(pb)
 team=o['A00000000000000000000014']['buildSettings'].get('DEVELOPMENT_TEAM','')
 for c in ['A00000000000000000000014','A00000000000000000000015']:
-    o[c]['buildSettings'].update({'MARKETING_VERSION':'0.11.2','CURRENT_PROJECT_VERSION':'18','CODE_SIGN_ENTITLEMENTS':'Configuration/Preview.entitlements','INFOPLIST_KEY_VayuAppKeychainGroup':'$(AppIdentifierPrefix)app.vayusetu.ios.preview'})
+    o[c]['buildSettings'].update({'MARKETING_VERSION':VERSION['marketing'],'CURRENT_PROJECT_VERSION':VERSION['build'],'CODE_SIGN_ENTITLEMENTS':'Configuration/Preview.entitlements','INFOPLIST_KEY_VayuAppKeychainGroup':'$(AppIdentifierPrefix)app.vayusetu.ios.preview'})
 full_configs=[]
 for base in ['A00000000000000000000014','A00000000000000000000015']:
     c=copy.deepcopy(o[base]);c['buildSettings'].update({'PRODUCT_BUNDLE_IDENTIFIER':'app.vayusetu.ios','INFOPLIST_KEY_CFBundleName':'VayuSetu','INFOPLIST_KEY_CFBundleDisplayName':'VayuSetu','INFOPLIST_KEY_VayuKeychainGroup':'$(AppIdentifierPrefix)app.vayusetu.ios.shared','INFOPLIST_KEY_VayuAppKeychainGroup':'$(AppIdentifierPrefix)app.vayusetu.ios','CODE_SIGN_ENTITLEMENTS':'Configuration/App.entitlements','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'$(inherited) VPN_ENABLED'+(' DEBUG' if c['name']=='Debug' else '')})
@@ -44,7 +45,7 @@ phases.append(add('ext-frameworks',{'isa':'PBXFrameworksBuildPhase','buildAction
 phases.append(add('ext-resources',{'isa':'PBXResourcesBuildPhase','buildActionMask':2147483647,'files':[pb,nb],'runOnlyForDeploymentPostprocessing':0}))
 ext_configs=[]
 for name in ['Debug','Release']:
-    settings={'CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':team,'CODE_SIGN_ENTITLEMENTS':'Configuration/VPN.entitlements','PRODUCT_BUNDLE_IDENTIFIER':'app.vayusetu.ios.tunnel','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'Tunnel/Info.plist','GENERATE_INFOPLIST_FILE':'YES','MARKETING_VERSION':'0.11.2','CURRENT_PROJECT_VERSION':'18','SKIP_INSTALL':'YES','APPLICATION_EXTENSION_API_ONLY':'YES','TARGETED_DEVICE_FAMILY':'1','SWIFT_VERSION':'5.0','SWIFT_OBJC_BRIDGING_HEADER':'Tunnel/Bridge.h','HEADER_SEARCH_PATHS':['$(inherited)','$(SRCROOT)/Vendor/wireguard-apple/Sources/WireGuardKitGo','$(SRCROOT)/Vendor/wireguard-apple/Sources/WireGuardKitC'],'LIBRARY_SEARCH_PATHS':['$(inherited)','$(BUILT_PRODUCTS_DIR)'],'OTHER_LDFLAGS':['$(inherited)','-lwg-go','-lresolv'],'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','ENABLE_USER_SCRIPT_SANDBOXING':'NO'}
+    settings={'CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':team,'CODE_SIGN_ENTITLEMENTS':'Configuration/VPN.entitlements','PRODUCT_BUNDLE_IDENTIFIER':'app.vayusetu.ios.tunnel','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'Tunnel/Info.plist','GENERATE_INFOPLIST_FILE':'YES','MARKETING_VERSION':VERSION['marketing'],'CURRENT_PROJECT_VERSION':VERSION['build'],'SKIP_INSTALL':'YES','APPLICATION_EXTENSION_API_ONLY':'YES','TARGETED_DEVICE_FAMILY':'1','SWIFT_VERSION':'5.0','SWIFT_OBJC_BRIDGING_HEADER':'Tunnel/Bridge.h','HEADER_SEARCH_PATHS':['$(inherited)','$(SRCROOT)/Vendor/wireguard-apple/Sources/WireGuardKitGo','$(SRCROOT)/Vendor/wireguard-apple/Sources/WireGuardKitC'],'LIBRARY_SEARCH_PATHS':['$(inherited)','$(BUILT_PRODUCTS_DIR)'],'OTHER_LDFLAGS':['$(inherited)','-lwg-go','-lresolv'],'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','ENABLE_USER_SCRIPT_SANDBOXING':'NO'}
     ext_configs.append(add('ext-'+name,{'isa':'XCBuildConfiguration','name':name,'buildSettings':settings}))
 ext_list=add('ext-configs',{'isa':'XCConfigurationList','buildConfigurations':ext_configs,'defaultConfigurationIsVisible':0,'defaultConfigurationName':'Release'})
 ext_id=add('extension',{'isa':'PBXNativeTarget','name':'VayuSetuTunnel','productName':'VayuSetuTunnel','productReference':ext_product,'productType':'com.apple.product-type.app-extension','buildConfigurationList':ext_list,'buildPhases':phases,'buildRules':[],'dependencies':[]})

@@ -343,17 +343,16 @@ struct VSExtensionStatusScreen: View {
 struct VSActivityScreen: View {
     @ObservedObject var filtering: FilteringController
     @ObservedObject var tunnel: TunnelController
-    @AppStorage("local-events-retention-days") private var retention = 7
     @State private var category = "All"
     @State private var clearing = false
     var rows: [String] { filtering.events.filter { category == "All" || $0.localizedCaseInsensitiveContains(category) } }
     var body: some View {
         VSCardList {
-            VSSection { Picker("Category", selection: $category) { ForEach(["All", "VPN", "DNS", "Safari", "Filter", "Privacy Lock"], id: \.self) { Text($0).tag($0) } }; Picker("Retention", selection: $retention) { Text("1 day").tag(1); Text("7 days").tag(7); Text("30 days").tag(30) } }
+            VSSection { Picker("Category", selection: $category) { ForEach(["All", "VPN", "DNS", "Safari", "Filter", "Privacy Lock"], id: \.self) { Text($0).tag($0) } }; Picker("Retention", selection: Binding(get: { filtering.eventRetention }, set: { filtering.setEventRetention($0) })) { Text("1 day").tag(1); Text("7 days").tag(7); Text("30 days").tag(30) } }
             VSSection("VPN events") { ForEach(tunnel.structuredEvents.prefix(200)) { event in VStack(alignment: .leading, spacing: 4) { Text(event.message).font(.subheadline); Text(event.timestamp, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(.secondary) } } }
             VSSection("Local events") { ForEach(Array(rows.enumerated()), id: \.offset) { _, event in Text(event).font(.footnote) }; if rows.isEmpty { ContentUnavailableView("No Recent Activity", systemImage: "clock", description: Text("Actual protection events appear here. Browsing and DNS query history are not collected.")) } }
             VSSection { ShareLink("Export Redacted Events", item: rows.joined(separator: "\n")); Button("Clear History", role: .destructive) { clearing = true } }
-        }.vsList().vsHeader("Privacy Activity").vsConfirm(isPresented: $clearing, title: "Delete local event history?", message: "Events recorded on this device are removed. Nothing leaves your phone either way.", confirm: "Delete", destructive: true, icon: "trash.fill") { filtering.clearEvents() }
+        }.vsList().vsHeader("Privacy Activity").onAppear { filtering.purgeExpiredEvents() }.vsConfirm(isPresented: $clearing, title: "Delete local event history?", message: "Events recorded on this device are removed. Nothing leaves your phone either way.", confirm: "Delete", destructive: true, icon: "trash.fill") { filtering.clearEvents() }
     }
 }
 struct VSAppearanceScreen: View {

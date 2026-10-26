@@ -33,6 +33,11 @@ import VayuSetuCore
     @Published private(set) var dnsCheckLines: [String] = []
     @Published private(set) var dnsCheckDate: Date?
     @Published private(set) var dnsChecking = false
+    /// The last known-answer check of the resolver in use (see ResolverTrust). Kept in memory only.
+    @Published private(set) var resolverTrust: ResolverTrustReport?
+    @Published private(set) var resolverTrustRunning = false
+    /// A suggestion about which saved resolver to use, or nil. It is only ever shown: nothing is switched.
+    @Published private(set) var resolverSuggestion: ResolverSuggestion?
     @Published var pendingDecision: ProtectionDecision?
     /// VayuSetu DNS over WireGuard: send the filter's upstream queries outside the VPN. Off by default (inside the VPN).
     @Published var dnsUpstreamDirect = UserDefaults.standard.bool(forKey: "dns-upstream-direct") { didSet { UserDefaults.standard.set(dnsUpstreamDirect, forKey: "dns-upstream-direct") } }
@@ -61,6 +66,8 @@ import VayuSetuCore
     @Published var probeRecordType: DNSRecordType = .a { didSet { invalidateDNS() } }
     @Published var connectOnLaunch = false { didSet { UserDefaults.standard.set(connectOnLaunch, forKey: "connect-on-launch") } }
     @Published var result = ""
+    /// The current run of the Checks screen, kept here so it survives leaving and re-entering the screen and is the one place that says whether the results on show are complete and current.
+    @Published var checkRun = CheckRun()
     @Published var pendingDeletion: SavedProfile?
     private var dnsRevision = UUID()
     private var dnsTask: Task<Void, Never>?
@@ -205,6 +212,7 @@ import VayuSetuCore
         if let reconciliationTask { await reconciliationTask.value; return }
         let task = Task { @MainActor in
             tunnel.refreshStatus()
+            filtering.purgeExpiredEvents()      // events that have aged out leave on their own, not only when the next event is recorded
             await systemDNS.refresh()
             await filtering.refresh()
             if lastDNSRestorationAttempt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,
@@ -243,7 +251,18 @@ import VayuSetuCore
                    tunnel.evidence.contains(where: { $0.name == "Resolver response" && $0.verdict == .passed }) {
                     return PrivacyIntegrityEngine.reconcile(ProtectionSnapshot(.dns, desired: true, state: .active, source: .resolverObservation, at: tunnel.evidence.first?.timestamp ?? tunnel.statusObservedAt, reason: "iOS accepted the selected encrypted resolver for this VPN and the resolver answered a test query. Apps with their own DNS are not covered."), now: now)
                 }
-                return ProtectionSnapshot(.dns, desired: true, state: .enabledNotVerified, source: .userPreference, reason: "VPN resolver configured. Waiting for the resolver check.")
+                // An external encrypted resolver has no VayuSetu filter to ask, so the system's acceptance of its settings and an application-level
+                // lookup are the evidence. Unavailable is not failed, and a resolver check that has not run yet is not either.
+                if selection.dnsEnabled, tunnel.status == .connected, let check = dnsVerification, now.timeIntervalSince(check.date) < 600 {
+                    let verdict = ExternalResolverVerdict.decide(accepted: tunnel.acceptedResolverMatches(endpoint), resolved: check.passed)
+                    switch verdict {
+                    case .verified: return PrivacyIntegrityEngine.reconcile(ProtectionSnapshot(.dns, desired: true, state: .active, source: .resolverObservation, at: check.date, reason: verdict.detail), now: now)
+                    case .failed: return ProtectionSnapshot(.dns, desired: true, state: .needsAttention, source: .resolverObservation, at: check.date, reason: verdict.detail)
+                    case .unavailable: return ProtectionSnapshot(.dns, desired: true, state: .enabledNotVerified, source: .osStatus, at: check.date, reason: verdict.detail)
+                    case .notChecked: break
+                    }
+                }
+                return ProtectionSnapshot(.dns, desired: true, state: .enabledNotVerified, source: .userPreference, reason: ExternalResolverVerdict.notChecked.detail)
             }
             return systemDNS.snapshot(now: now)
         case .vpn:
@@ -525,6 +544,11 @@ import VayuSetuCore
         return active?.name
     }
     func invalidateDNS() { dnsRevision = UUID(); dnsTask?.cancel(); result = "" }
+    /// Waits for the DNS lookup test started by `testDNS()` to finish (returns at once when none is running).
+    func finishedDNSTest() async { await dnsTask?.value }
+    /// Forgets every stored result of the Checks screen that belongs to the resolver and route in use. A run, or a change of resolver, starts from nothing:
+    /// a result from another configuration must never be shown beside the current one.
+    func clearCheckResults() { invalidateDNS(); dnsVerification = nil }
     func testDNS() {
         do {
             let url = try DNSService.endpoint(endpoint)
@@ -596,6 +620,33 @@ import VayuSetuCore
             notice = "Selected resolver and saved VPN configuration removed. Other profiles remain available."
             return true
         } catch { notice = "Could not remove the resolver and saved VPN configuration."; return false }
+    }
+    /// True when this resolver is the one a running or starting connection is using right now. Only that one has to wait: every other saved
+    /// resolver can be deleted whenever you like, whether or not DNS is on.
+    func resolverInUse(_ id: UUID) -> Bool {
+        id == selectedDNS && (tunnel.running || tunnel.busy || systemDNS.busy)
+    }
+
+    /// Deletes one saved resolver, not just the selected one. The built-in resolver cannot be removed, and the one in use must be turned off first.
+    func deleteResolver(_ id: UUID) async -> Bool {
+        guard storageWritable else { notice = "Saved storage needs recovery before changes can be made."; return false }
+        guard id != VayuSetuDNS.id else { notice = "VayuSetu DNS is built in and cannot be removed."; return false }
+        guard !resolverInUse(id) else { notice = "This resolver is in use. Turn DNS off first, then delete it."; return false }
+        guard !testing, !connectionOperation else { notice = "Finish the test in progress first, then delete the resolver."; return false }
+        // The selected resolver also owns the saved VPN configuration built from it; that is removed with it.
+        if id == selectedDNS { return await forgetEndpoint() }
+        connectionOperation = true; defer { connectionOperation = false }
+        do {
+            let account = "dns-" + id.uuidString
+            let old = try Vault.get(account)
+            try Vault.delete(account)
+            let items = dnsProfiles.filter { $0.id != id }
+            do { try saveDNS(items) } catch { if let old { try? Vault.put(old, account: account) }; throw error }
+            dnsProfiles = items
+            if backupDNS == id { backupDNS = nil }
+            notice = "Resolver removed. Other profiles remain available."
+            return true
+        } catch { notice = "Could not remove the resolver."; return false }
     }
     func saveEndpoint() {
         guard storageWritable else { notice = "Saved storage needs recovery before changes can be made."; return }
@@ -732,9 +783,13 @@ extension AppStore {
 // MARK: - Protection coordinator (ADR-011)
 
 /// What the user switched on. These are requests; observed state is derived from the tunnels and the OS.
-struct ProtectionSelection: Codable, Equatable { var vpnEnabled = false; var dnsEnabled = false; var safariAdblockEnabled = false }
+struct ProtectionSelection: Codable, Equatable {
+    var vpnEnabled = false; var dnsEnabled = false; var safariAdblockEnabled = false
+    var target: ProtectionTarget { ProtectionTarget(vpn: vpnEnabled, dns: dnsEnabled, adblock: safariAdblockEnabled) }
+}
 /// The last network combination that was running, restored by one tap of the master power button.
 struct SavedNetworkMode: Codable, Equatable { var vpn: Bool; var dns: Bool }
+struct ResolverTrustReport: Equatable { let date: Date; let verdict: ResolverTrust.Verdict; let summary: String; let resolver: String }
 struct DNSVerification: Equatable { let date: Date; let passed: Bool; let blockedChecked: Bool; let detail: String }
 enum ProtectionPill { case vpn, dns, adblock }
 enum PillState: Equatable { case off, active, pending, limited, failed }
@@ -868,11 +923,86 @@ extension AppStore {
         }
         return rules.first(where: { $0.action == .block && $0.scope == .domainAndSubdomains })?.domain
     }
+    /// Looks for a reason to suggest another saved resolver: the current one failing, with enough lookups to say so, while the network itself was fine.
+    /// Other resolvers are probed (one lookup each) only then. `connectionHealthy` says the router and internet were measured good; unknown counts as no.
+    func evaluateResolverSuggestion(connectionHealthy: Bool) async {
+        guard tunnel.status == .connected, connectionHealthy, let health = tunnel.resolverHealth(), (health.failureShare ?? 0) >= ResolverRecommendation.minimumFailureShare else {
+            if resolverSuggestion != nil { resolverSuggestion = nil }
+            return
+        }
+        let current = ResolverCandidate(name: dnsName.isEmpty ? "Your resolver" : dnsName, filtering: isVayuSetuDNSSelected ? .vayusetuLists : .unknown, worksThroughVPN: true)
+        var others: [ResolverCandidate] = []
+        for profile in dnsProfiles where profile.id != selectedDNS {
+            let stored = profile.id == VayuSetuDNS.id ? Data(VayuSetuDNS.upstreamEndpoint.utf8) : (try? Vault.get("dns-" + profile.id.uuidString)) ?? nil
+            guard let data = stored, let text = String(data: data, encoding: .utf8), let url = try? DNSService.endpoint(text) else { continue }
+            let started = ContinuousClock.now
+            let answered = (try? await DNSService.probe(url)) != nil
+            let parts = started.duration(to: .now).components
+            others.append(ResolverCandidate(name: profile.name, filtering: profile.id == VayuSetuDNS.id ? .vayusetuLists : .unknown, worksThroughVPN: true, reachableNow: answered,
+                                            probeMs: answered ? Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15 : nil))
+        }
+        let vpnOn = tunnel.running && !tunnel.localDNSRunning
+        resolverSuggestion = ResolverRecommendation.evaluate(current: current, health: health, connectionHealthy: connectionHealthy, vpnOn: vpnOn, others: others)
+    }
+    /// Asks the system three questions with fixed, well-known answers and compares. Sends three lookups through the resolver in use and nothing else.
+    func runResolverTrust() async {
+        guard !resolverTrustRunning, tunnel.status != .connecting else { return }
+        resolverTrustRunning = true; defer { resolverTrustRunning = false }
+        var results: [ResolverTrust.Result] = []
+        for known in ResolverTrust.known {
+            let answers = await Self.systemAddresses(known.name)
+            results.append(ResolverTrust.Result(name: known.name, outcome: ResolverTrust.classify(name: known.name, answers: answers)))
+        }
+        let verdict = ResolverTrust.verdict(results)
+        resolverTrust = ResolverTrustReport(date: Date(), verdict: verdict, summary: ResolverTrust.summary(results), resolver: dnsName.isEmpty ? "the system resolver" : dnsName)
+        filtering.record("Resolver check (\(resolverTrust?.resolver ?? "")): \(verdict.title)")
+        if case .suspicious = verdict { tunnel.record(ResolverTrust.summary(results), severity: .warning, category: "protection") }
+    }
+    /// The addresses the system returns for a name, as an application would get them (getaddrinfo), giving up after ten seconds.
+    nonisolated static func systemAddresses(_ host: String) async -> [String] {
+        await withTaskGroup(of: [String].self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        var hints = addrinfo(); hints.ai_socktype = SOCK_STREAM
+                        var found: UnsafeMutablePointer<addrinfo>?
+                        guard getaddrinfo(host, "443", &hints, &found) == 0, let first = found else { continuation.resume(returning: []); return }
+                        var out: [String] = []; var cursor: UnsafeMutablePointer<addrinfo>? = first
+                        while let node = cursor {
+                            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                            if getnameinfo(node.pointee.ai_addr, node.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 { out.append(String(cString: buffer)) }
+                            cursor = node.pointee.ai_next
+                        }
+                        freeaddrinfo(first)
+                        continuation.resume(returning: Array(Set(out)))
+                    }
+                }
+            }
+            group.addTask { try? await Task.sleep(for: .seconds(10)); return [] }
+            let first = await group.next() ?? []
+            group.cancelAll()
+            return first
+        }
+    }
+    /// VPN with an external encrypted resolver (no VayuSetu filter to ask): a normal name must resolve the way applications resolve names,
+    /// through whatever resolver the system applied. One lookup, on connect and then every few minutes; it changes no setting.
+    func verifyExternalResolver() async {
+        guard tunnel.status == .connected, tunnel.protocolName == "WireGuard", !tunnel.localDNSRunning, tunnel.stats?.dnsCounters == nil,
+              selection.dnsEnabled, !endpoint.isEmpty, !dnsVerifying else { return }
+        dnsVerifying = true; defer { dnsVerifying = false }
+        let resolved = await Self.systemResolves("example.com")
+        let verdict = ExternalResolverVerdict.decide(accepted: tunnel.acceptedResolverMatches(endpoint), resolved: resolved)
+        dnsVerification = DNSVerification(date: Date(), passed: resolved, blockedChecked: false, detail: verdict.detail)
+        filtering.record("Resolver check (\(dnsName.isEmpty ? "external resolver" : dnsName)): \(verdict)")
+    }
+    /// Whether the system resolves a name the way an application would (one helper, shared with the resolver trust check).
+    nonisolated static func systemResolves(_ host: String) async -> Bool { !(await systemAddresses(host)).isEmpty }
     /// End-to-end check through the device's own DNS path: a normal name must resolve, and (with VayuSetu lists) a listed name must not exist.
     /// It sends at most three small queries, on connect and when the user asks; it never changes any setting.
     func verifyLocalDNS() async {
         let hostsFilter = tunnel.localDNSRunning || (tunnel.protocolName == "WireGuard" && tunnel.stats?.dnsCounters != nil)
-        guard hostsFilter, tunnel.status == .connected, !dnsVerifying else { return }
+        if !hostsFilter { await verifyExternalResolver(); return }
+        guard tunnel.status == .connected, !dnsVerifying else { return }
         dnsVerifying = true; defer { dnsVerifying = false }
         var passed = true; var notes: [String] = []; var blockedChecked = false
         do {
@@ -937,7 +1067,8 @@ extension AppStore {
         guard tunnel.status == .connected else { return }
         if tunnel.protocolName == "WireGuard", tunnel.stats?.dnsCounters == nil, selection.dnsEnabled, !endpoint.isEmpty {
             // Resolver-only VPN + DNS: the existing resolver check supplies the evidence; no public-IP probes.
-            tunnel.verifyConnection(resolver: endpoint, includeIPProbes: false); return
+            tunnel.verifyConnection(resolver: endpoint, includeIPProbes: false)
+            try? await Task.sleep(for: .seconds(3)); await verifyExternalResolver(); return
         }
         for attempt in 0..<3 {
             try? await Task.sleep(for: .seconds(attempt == 0 ? 2 : 3))
@@ -961,7 +1092,21 @@ extension AppStore {
 
     /// The single path every control uses. It plans first, executes the plan's steps in order, and reports honest limits.
     @discardableResult
-    func applySelection(_ requested: ProtectionSelection, confirmed: Bool = false) async -> String {
+    func applySelection(_ requested: ProtectionSelection, confirmed: Bool = false, source: String = "app") async -> String {
+        let observed = observedSelection
+        tunnel.record(ProtectionRequestPolicy.logLine(source: source, requested: requested.target, observed: observed.target), category: "protection")
+        // Asking for what is already so is not a change. A repeated or replayed callback therefore cannot flip protection, and a remembered
+        // choice that no longer matches what is running is brought back in line without touching the tunnel.
+        if !operationInFlight, !tunnel.busy, ProtectionRequestPolicy.isNoChange(requested.target, from: observed.target) {
+            if selection != requested { selection = requested; persistSelection() }
+            return ""
+        }
+        let outcome = await applySelectionCore(requested, confirmed: confirmed)
+        tunnel.record("Protection request from \(source) finished: " + (outcome.isEmpty ? "done" : outcome), category: "protection")
+        return outcome
+    }
+    @discardableResult
+    private func applySelectionCore(_ requested: ProtectionSelection, confirmed: Bool = false) async -> String {
         // Wait for a change that is still running (latest tap wins) rather than rejecting the new one.
         applyGeneration &+= 1; let generation = applyGeneration
         var waited = 0
@@ -1047,53 +1192,53 @@ extension AppStore {
         Task { [self] in protectionNotice = await applySelection(decision.target, confirmed: true) }
     }
     /// Master power. Returns true when the mode selector must be shown (no network mode has been used yet).
-    func powerTapped() async -> Bool {
+    func powerTapped(source: String = "power button") async -> Bool {
         if networkActive {
             var off = observedSelection; off.vpnEnabled = false; off.dnsEnabled = false
             protectionNotice = "Turning network protection off…"
-            protectionNotice = await applySelection(off, confirmed: true)
+            protectionNotice = await applySelection(off, confirmed: true, source: source)
             return false
         }
         guard powerModeChosen, let saved = savedNetwork else { return true }
         var on = observedSelection; on.vpnEnabled = saved.vpn; on.dnsEnabled = saved.dns
         protectionNotice = "Starting " + OperatingMode.resolve(vpn: saved.vpn, dns: saved.dns, safari: false).title + "… Touch and hold the button to change mode."
-        protectionNotice = await applySelection(on)
+        protectionNotice = await applySelection(on, source: source)
         return false
     }
     /// Turns the VPN and DNS protection off together (Safari adblocking is separate). Used by Disconnect buttons.
-    func powerOffNetwork() async {
+    func powerOffNetwork(source: String = "app") async {
         guard networkActive else { return }
         var off = observedSelection; off.vpnEnabled = false; off.dnsEnabled = false
-        protectionNotice = await applySelection(off, confirmed: true)
+        protectionNotice = await applySelection(off, confirmed: true, source: source)
     }
-    func chooseMode(vpn: Bool, dns: Bool, safari: Bool? = nil) async {
+    func chooseMode(vpn: Bool, dns: Bool, safari: Bool? = nil, source: String = "app") async {
         powerModeChosen = true
         var next = observedSelection; next.vpnEnabled = vpn; next.dnsEnabled = dns
         if let safari { next.safariAdblockEnabled = safari }
-        protectionNotice = await applySelection(next)
+        protectionNotice = await applySelection(next, source: source)
     }
-    func togglePill(_ pill: ProtectionPill) async {
+    func togglePill(_ pill: ProtectionPill, source: String = "app") async {
         var next = observedSelection
         switch pill {
         case .vpn: next.vpnEnabled = vpnPill == .off
         case .dns: next.dnsEnabled = dnsPill == .off
         case .adblock: next.safariAdblockEnabled = adblockPill == .off
         }
-        protectionNotice = await applySelection(next)
+        protectionNotice = await applySelection(next, source: source)
     }
 
     /// Applies the value delivered by a native Toggle. This is deliberately
     /// separate from togglePill: SwiftUI may replay a binding setter while a
     /// protection state is settling, and deriving the next value again can
     /// turn a just-established tunnel back off.
-    func setPill(_ pill: ProtectionPill, enabled: Bool) async {
+    func setPill(_ pill: ProtectionPill, enabled: Bool, source: String = "app") async {
         var next = observedSelection
         switch pill {
         case .vpn: next.vpnEnabled = enabled
         case .dns: next.dnsEnabled = enabled
         case .adblock: next.safariAdblockEnabled = enabled
         }
-        protectionNotice = await applySelection(next)
+        protectionNotice = await applySelection(next, source: source)
     }
 }
 

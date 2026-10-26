@@ -896,3 +896,124 @@ final class LaunchTests: XCTestCase {
     }
 
 }
+
+/// Tests of what the app DOES, not only whether a screen can be reached: that state changes stick, that every control can be used with VoiceOver, and that
+/// a running check reports its progress honestly.
+///
+/// STATUS: written and compiled; NOT YET RUN on a device. Nothing here is evidence until `scripts/test-ui.sh <device>` has been run and its result recorded
+/// (`scripts/ui-evidence.py`). The release check reports the suite as not run until then. Tests that need the VPN permission or a real server are in LaunchTests
+/// and skip themselves when the device has not granted it; they are reported as skipped, never as passed.
+final class BehaviourTests: XCTestCase {
+    private func launch(tab: Int? = nil) -> XCUIApplication {
+        let app = XCUIApplication(bundleIdentifier: "app.vayusetu.ios")
+        app.launchArguments = ["--ui-testing"] + (tab.map { ["--ui-tab", String($0)] } ?? [])
+        app.launch()
+        return app
+    }
+
+    // MARK: Accessibility
+
+    /// Every button, switch and tab the person can reach has a spoken label. An unlabelled control is unusable with VoiceOver.
+    func testEveryControlOnEveryTabHasAnAccessibilityLabel() {
+        continueAfterFailure = true
+        let app = launch()
+        XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 15))
+        for tab in ["Home", "Profiles", "DNS", "Adblock", "Settings"] {
+            app.tabBars.buttons[tab].tap()
+            XCTAssertTrue(app.tabBars.buttons[tab].isSelected, "\(tab) is selected after tapping it")
+            _ = app.navigationBars.firstMatch.waitForExistence(timeout: 5)
+            for query in [app.buttons, app.switches, app.textFields, app.secureTextFields] {
+                for element in query.allElementsBoundByIndex where element.isHittable {
+                    XCTAssertFalse(element.label.trimmingCharacters(in: .whitespaces).isEmpty && element.identifier.isEmpty,
+                                   "An unlabelled control on \(tab): \(element.debugDescription)")
+                }
+            }
+        }
+    }
+
+    /// Tap targets are at least 44 points: smaller controls are hard to hit for people with limited dexterity.
+    func testTapTargetsAreAtLeast44PointsOnTheMainTabs() {
+        continueAfterFailure = true
+        let app = launch()
+        XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 15))
+        for tab in ["Home", "Profiles", "DNS", "Settings"] {
+            app.tabBars.buttons[tab].tap()
+            for button in app.buttons.allElementsBoundByIndex where button.isHittable && !button.label.isEmpty {
+                let f = button.frame
+                XCTAssertGreaterThanOrEqual(max(f.width, f.height), 44 - 0.5, "'\(button.label)' on \(tab) is only \(Int(f.width))×\(Int(f.height)) points")
+            }
+        }
+    }
+
+    // MARK: State that must stick
+
+    /// The event retention choice changes immediately and is still there after the app is closed and opened again.
+    func testEventRetentionChoiceIsKeptAcrossRelaunch() {
+        continueAfterFailure = false
+        var app = launch(tab: 4)
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+        func openPrivacyActivity() {
+            let row = app.staticTexts["Privacy Activity"].firstMatch
+            for _ in 0..<8 { if row.isHittable { break }; app.swipeUp() }
+            XCTAssertTrue(row.isHittable); row.tap()
+            XCTAssertTrue(app.navigationBars["Privacy Activity"].waitForExistence(timeout: 5))
+        }
+        openPrivacyActivity()
+        let picker = app.buttons["Retention"].exists ? app.buttons["Retention"] : app.segmentedControls.firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "the retention control is on screen")
+        // Choose "1 day", whatever it was before.
+        if app.buttons["1 day"].exists { app.buttons["1 day"].tap() } else { picker.tap(); app.buttons["1 day"].tap() }
+        XCTAssertTrue(app.buttons["1 day"].isSelected || app.staticTexts["1 day"].exists, "1 day shows as chosen straight away")
+
+        app.terminate()
+        app = launch(tab: 4)
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+        openPrivacyActivity()
+        XCTAssertTrue(app.buttons["1 day"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["1 day"].isSelected || app.staticTexts["1 day"].exists, "1 day is still chosen after relaunch")
+        // Put it back so a later run starts from the usual default.
+        if app.buttons["7 days"].exists { app.buttons["7 days"].tap() }
+    }
+
+    // MARK: Honest progress
+
+    /// A run of the Checks screen says it is running while it runs, never shows a count before it has finished, and ends by naming when it finished.
+    func testChecksRunReportsProgressHonestly() {
+        continueAfterFailure = false
+        let app = launch(tab: 4)
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+        let row = app.staticTexts["Checks"].firstMatch
+        for _ in 0..<8 { if row.isHittable { break }; app.swipeUp() }
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Checks"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Not tested"].waitForExistence(timeout: 5), "before a run, nothing is claimed")
+        let run = app.buttons["Run Available Checks"]
+        XCTAssertTrue(run.waitForExistence(timeout: 5)); run.tap()
+        // While it runs: the headline says so and no pass/fail count is on screen.
+        XCTAssertTrue(app.staticTexts["Running…"].waitForExistence(timeout: 5), "the headline says the checks are running")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS ' passed ·'")).firstMatch.exists, "no count is shown before every check has finished")
+        // When it ends: a finish time is shown, and the button is usable again.
+        let finished = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Finished '")).firstMatch
+        XCTAssertTrue(finished.waitForExistence(timeout: 90), "the run ends and says when")
+        XCTAssertTrue(app.buttons["Run Available Checks"].isEnabled)
+    }
+
+    // MARK: Error flows
+
+    /// A resolver that cannot be used is refused with a message that says why, and nothing is saved.
+    func testBadResolverEndpointIsRefusedWithAReason() {
+        continueAfterFailure = false
+        let app = launch(tab: 2)
+        XCTAssertTrue(app.tabBars.buttons["DNS"].waitForExistence(timeout: 15))
+        let add = app.buttons["Add resolver"].exists ? app.buttons["Add resolver"] : app.buttons["Add"]
+        guard add.waitForExistence(timeout: 5) else { return XCTFail("no way to add a resolver was found on the DNS tab") }
+        add.tap()
+        let endpoint = app.textFields.element(boundBy: app.textFields.count - 1)
+        XCTAssertTrue(endpoint.waitForExistence(timeout: 5))
+        endpoint.tap(); endpoint.typeText("http://not-encrypted.example")      // plain http is never accepted
+        let save = app.buttons["Save"]
+        if save.exists && save.isEnabled { save.tap() }
+        let message = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'https' OR label CONTAINS[c] 'encrypted' OR label CONTAINS[c] 'invalid'")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5) || !save.isEnabled, "the person is told why an unencrypted endpoint cannot be used")
+    }
+}

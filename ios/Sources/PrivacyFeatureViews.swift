@@ -423,9 +423,6 @@ import UIKit
 #endif
 
 // MARK: - Shared activity UI (Home and Adblock read the same series from the same repository)
-/// The reporting period is one setting shared by Home and Adblock, remembered until the user changes it.
-enum ActivityPeriodStore { static let key = "activity.period" }
-
 struct VSActivityChart: View {
     let series: ActivitySeries
     var height: CGFloat = 130
@@ -437,7 +434,7 @@ struct VSActivityChart: View {
         return series.points.min { abs($0.date.timeIntervalSince(selected)) < abs($1.date.timeIntervalSince(selected)) }
     }
     private var xFormat: Date.FormatStyle {
-        switch series.component { case .hour: .dateTime.hour(); case .month: .dateTime.month(.abbreviated); default: .dateTime.month(.abbreviated).day() }
+        switch series.component { case .minute: .dateTime.hour().minute(); case .hour: .dateTime.hour(); case .month: .dateTime.month(.abbreviated); default: .dateTime.month(.abbreviated).day() }
     }
     var body: some View {
         Group {
@@ -485,23 +482,57 @@ struct VSActivityChart: View {
 struct VSActivityPeriodButton: View {
     @Binding var period: ActivityPeriod
     @State private var choosing = false
+    @AppStorage(ActivityPeriodStore.customStartKey) private var customStart = Date().addingTimeInterval(-6 * 86400).timeIntervalSince1970
+    @AppStorage(ActivityPeriodStore.customEndKey) private var customEnd = Date().timeIntervalSince1970
+    private var pill: some View {
+        HStack(spacing: 4) { Text(period.title).font(.footnote.weight(.medium)); Image(systemName: "chevron.up.chevron.down").font(.caption2) }
+            .padding(.horizontal, 10).frame(minHeight: 32).background(VSDesign.surface, in: Capsule()).overlay(Capsule().stroke(VSDesign.separator, lineWidth: 1))
+            .padding(.vertical, 6).contentShape(Rectangle())
+    }
+    #if os(macOS)
+    /// On the Mac a sheet has no size of its own, so the choices are a pop-up menu, and the custom range is a small popover.
     var body: some View {
-        Button { choosing = true } label: {
-            HStack(spacing: 4) { Text(period.title).font(.footnote.weight(.medium)); Image(systemName: "chevron.up.chevron.down").font(.caption2) }
-                .padding(.horizontal, 10).frame(minHeight: 32).background(VSDesign.surface, in: Capsule()).overlay(Capsule().stroke(VSDesign.separator, lineWidth: 1))
-                .padding(.vertical, 6).contentShape(Rectangle())
-        }.buttonStyle(VSPlainButtonStyle()).accessibilityLabel("Period, \(period.title)").accessibilityIdentifier("ActivityPeriod")
+        Menu {
+            ForEach(ActivityPeriod.allCases) { option in
+                Button { period = option; if option == .custom { choosing = true } } label: {
+                    if option == period { Label(option.title, systemImage: "checkmark") } else { Text(option.title) }
+                }
+            }
+        } label: { pill }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("Period, \(period.title)").accessibilityIdentifier("ActivityPeriod")
+            .popover(isPresented: $choosing, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Custom range").font(.headline)
+                    DatePicker("From", selection: Binding(get: { Date(timeIntervalSince1970: customStart) }, set: { customStart = $0.timeIntervalSince1970; if customEnd < customStart { customEnd = customStart } }), in: ...Date(), displayedComponents: .date)
+                    DatePicker("To", selection: Binding(get: { Date(timeIntervalSince1970: customEnd) }, set: { customEnd = max($0.timeIntervalSince1970, customStart) }), in: ...Date(), displayedComponents: .date)
+                    HStack { Spacer(); Button("Show this range") { choosing = false }.keyboardShortcut(.defaultAction) }
+                }.padding(16).frame(width: 280)
+            }
+    }
+    #else
+    var body: some View {
+        Button { choosing = true } label: { pill }
+            .buttonStyle(VSPlainButtonStyle()).accessibilityLabel("Period, \(period.title)").accessibilityIdentifier("ActivityPeriod")
             .sheet(isPresented: $choosing) {
                 NavigationStack {
-                    List(ActivityPeriod.allCases) { option in
-                        Button { period = option; choosing = false } label: {
-                            HStack { Text(option.title).foregroundStyle(.primary); Spacer(); if option == period { Image(systemName: "checkmark").foregroundStyle(VSDesign.accent) } }.frame(minHeight: 44).contentShape(Rectangle())
+                    List {
+                        ForEach(ActivityPeriod.allCases) { option in
+                            Button { period = option; if option != .custom { choosing = false } } label: {
+                                HStack { Text(option.title).foregroundStyle(.primary); Spacer(); if option == period { Image(systemName: "checkmark").foregroundStyle(VSDesign.accent) } }.frame(minHeight: 44).contentShape(Rectangle())
+                            }
+                        }
+                        if period == .custom {
+                            DatePicker("From", selection: Binding(get: { Date(timeIntervalSince1970: customStart) }, set: { customStart = $0.timeIntervalSince1970; if customEnd < customStart { customEnd = customStart } }), in: ...Date(), displayedComponents: .date)
+                            DatePicker("To", selection: Binding(get: { Date(timeIntervalSince1970: customEnd) }, set: { customEnd = max($0.timeIntervalSince1970, customStart) }), in: ...Date(), displayedComponents: .date)
+                            Button("Show this range") { choosing = false }
                         }
                     }.vsHeader("Period")
                         .toolbar { ToolbarItem(placement: .cancellationAction) { VSCloseButton { choosing = false } } }
-                }.vsSheetChrome([.height(400)])
+                }.vsSheetChrome([.height(period == .custom ? 640 : 560)])
             }
     }
+    #endif
 }
 
 /// Compact Activity block for Home: header with period, chart, and three figures. Scope is DNS filtering only.
@@ -548,7 +579,7 @@ struct VSDomainRankingScreen: View {
                 VStack(spacing: 8) {
                     Image(systemName: "list.number").font(.title2).foregroundStyle(.tertiary)
                     Text("Per-domain lists are off").font(.headline)
-                    Text(kind == .active ? "Most Active would list the domains your device asked for most often." : "Most Blocked would list the domains VayuSetu blocked most often.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(kind == .active ? "Most Allowed would list the domains that were answered most often." : "Most Blocked would list the domains VayuSetu blocked most often.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }.frame(maxWidth: .infinity).padding(.vertical, 24)
             }
             VSSection {
@@ -557,7 +588,7 @@ struct VSDomainRankingScreen: View {
             VSSection {
                 Button("Clear Activity Statistics", role: .destructive) { confirmClear = true }
             } footer: { Text("Removes the request and blocked counts shown on Home and Adblock.") }
-        }.vsList().vsHeader(kind == .active ? "Most Active" : "Most Blocked")
+        }.vsList().vsHeader(kind == .active ? "Most Allowed" : "Most Blocked")
             .vsConfirm(isPresented: $confirmClear, title: "Clear activity statistics?", message: "Counts and rankings on this screen start again from zero.", confirm: "Clear", destructive: true, icon: "trash.fill") { filtering.clearActivity() }
     }
 }
@@ -1160,7 +1191,7 @@ struct VSActivityDashboard: View {
             VSActivityChart(series: series, height: 160, interactive: true)
             Text("Scope: DNS requests observed by VayuSetu DNS filtering. Not all device or Safari traffic.").font(.caption2).foregroundStyle(.secondary)
             Divider().overlay(VSDesign.separator)
-            NavigationLink { VSDomainRankingScreen(kind: .active, filtering: filtering) } label: { rankingRow("Most Active", "Domains asked for most often") }.buttonStyle(VSPlainButtonStyle())
+            NavigationLink { VSDomainRankingScreen(kind: .active, filtering: filtering) } label: { rankingRow("Most Allowed", "Domains that went through most often") }.buttonStyle(VSPlainButtonStyle())
             Divider().overlay(VSDesign.separator)
             NavigationLink { VSDomainRankingScreen(kind: .blocked, filtering: filtering) } label: { rankingRow("Most Blocked", "Domains blocked most often") }.buttonStyle(VSPlainButtonStyle())
         }.vsCard()

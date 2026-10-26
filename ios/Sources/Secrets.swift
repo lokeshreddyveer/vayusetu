@@ -100,6 +100,9 @@ struct TunnelSecret: Codable {
     var runtime: String? = nil
     /// Local DNS tunnel only: apply the compiled VayuSetu filter snapshot before forwarding upstream.
     var filtering: Bool? = nil
+    /// DNS rebinding protection in the tunnel's DNS filter. nil = on.
+    /// The app fills this from its setting each time it builds a secret; a secret that does not carry it (older ones) decodes as nil.
+    var rebindingProtection: Bool? = UserDefaults.standard.object(forKey: "rebinding-protection") as? Bool
     /// WireGuard + VayuSetu DNS: send the filter's upstream queries outside the VPN instead of through it.
     /// Default (nil/false) keeps them inside the tunnel. Use only if DNS fails to resolve inside the VPN.
     var dnsUpstreamDirect: Bool? = nil
@@ -166,7 +169,14 @@ enum DNSConfigurationIdentity {
 }
 /// Real events observed by the local DNS tunnel; nothing here is estimated.
 /// `rules` is the number of rules loaded into the matcher; `blocked` counts queries it answered locally.
-struct DNSOnlyCounters: Codable, Equatable { var queries: UInt64 = 0, answered: UInt64 = 0, failed: UInt64 = 0, dropped: UInt64 = 0, blocked: UInt64 = 0, threats: UInt64 = 0, rules: UInt64 = 0
+/// What the encrypted resolver did, as the Go client counts it (see dnsstats.go). Optional everywhere: older tunnels do not send it.
+struct ResolverWire: Codable, Equatable {
+    var answered: UInt64 = 0, timeouts: UInt64 = 0, errors: UInt64 = 0, cacheHits: UInt64 = 0
+    var rtt: [UInt64] = []
+    var generation: UInt64 = 0
+    var windowStart: Int64 = 0
+}
+struct DNSOnlyCounters: Codable, Equatable { var queries: UInt64 = 0, answered: UInt64 = 0, failed: UInt64 = 0, dropped: UInt64 = 0, blocked: UInt64 = 0, threats: UInt64 = 0, rules: UInt64 = 0, rebinding: UInt64 = 0, upstream: ResolverWire? = nil
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -174,11 +184,20 @@ struct DNSOnlyCounters: Codable, Equatable { var queries: UInt64 = 0, answered: 
         failed = try c.decodeIfPresent(UInt64.self, forKey: .failed) ?? 0; dropped = try c.decodeIfPresent(UInt64.self, forKey: .dropped) ?? 0
         blocked = try c.decodeIfPresent(UInt64.self, forKey: .blocked) ?? 0; threats = try c.decodeIfPresent(UInt64.self, forKey: .threats) ?? 0
         rules = try c.decodeIfPresent(UInt64.self, forKey: .rules) ?? 0
+        rebinding = try c.decodeIfPresent(UInt64.self, forKey: .rebinding) ?? 0
+        upstream = try c.decodeIfPresent(ResolverWire.self, forKey: .upstream)
     }
-    private enum Keys: String, CodingKey { case queries, answered, failed, dropped, blocked, threats, rules }
+    private enum Keys: String, CodingKey { case queries, answered, failed, dropped, blocked, threats, rules, rebinding, upstream }
 }
 
 /// One lookup the local DNS tunnel handled. Kept in the tunnel's memory only, and only while the user has switched the lookup list on.
+/// Counts for one domain since the tunnel was last asked. An empty name stands for every domain that was not listed individually.
+struct DomainCount: Codable, Hashable {
+    var n: String
+    var a: UInt32
+    var b: UInt32
+}
+
 struct DNSQueryEntry: Codable, Identifiable, Hashable {
     var id: UInt64
     var time: Date
@@ -302,6 +321,32 @@ struct TunnelStats: Codable {
     var ipv6Blocked = false
     var diagnosticVersion: Int? = nil
     var appliedPolicy: AppliedTunnelPolicy? = nil
+    /// What the tunnel process itself costs, read by the tunnel and reported with its statistics. Optional: older tunnels do not send it.
+    var resources: TunnelResources? = nil
+}
+
+/// The tunnel process's own use of the machine: total processor time (cumulative) and memory in use now.
+struct TunnelResources: Codable, Equatable {
+    var cpuSeconds: Double
+    var memoryBytes: UInt64
+    var sampledAt: Date
+    /// Processor use between two samples, as a share of one core, or nil if they are not comparable.
+    static func cpuShare(from older: TunnelResources, to newer: TunnelResources) -> Double? {
+        let elapsed = newer.sampledAt.timeIntervalSince(older.sampledAt)
+        guard elapsed >= 1, newer.cpuSeconds >= older.cpuSeconds else { return nil }
+        return (newer.cpuSeconds - older.cpuSeconds) / elapsed
+    }
+    #if canImport(Darwin)
+    /// Reads this process's own numbers. Used by the tunnel.
+    static func ofThisProcess(now: Date = Date()) -> TunnelResources? {
+        var info = mach_task_basic_info(); var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) } }
+        guard status == KERN_SUCCESS else { return nil }
+        let user = Double(info.user_time.seconds) + Double(info.user_time.microseconds) / 1_000_000
+        let system = Double(info.system_time.seconds) + Double(info.system_time.microseconds) / 1_000_000
+        return TunnelResources(cpuSeconds: user + system, memoryBytes: UInt64(info.resident_size), sampledAt: now)
+    }
+    #endif
 }
 
 /// A plain verdict on the tunnel, built only from what the system and the tunnel extension report.
@@ -363,6 +408,19 @@ struct TunnelDiagnosticRequest: Codable {
         if value.operation == "lookups-off" { return (false, nil) }
         if value.operation.hasPrefix("lookups:"), let id = UInt64(value.operation.dropFirst(8)) { return (nil, id) }
         return nil
+    }
+    /// The optional domain history: switch the tunnel's per-domain counting on or off, and take the counts since the last take.
+    static func domains(on: Bool) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: on ? "domains-on" : "domains-off")) }
+    static var domainsTake: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "domains-take")) }
+    /// nil for anything that is not a domain request; otherwise true/false for on/off, or nil inside for a take.
+    static func domainsRequest(_ data: Data) -> (on: Bool?, take: Bool)? {
+        guard data.count <= 256, let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1 else { return nil }
+        switch value.operation {
+        case "domains-on": return (true, false)
+        case "domains-off": return (false, false)
+        case "domains-take": return (nil, true)
+        default: return nil
+        }
     }
     /// Mac only: the compiled snapshot itself, prefixed so the tunnel can tell it from a plain request.
     private static let rulesMagic = Data("VSRULES1".utf8)

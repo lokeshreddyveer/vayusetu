@@ -48,6 +48,8 @@ import Combine
         monitor.start(queue: DispatchQueue(label: "VayuSetu.NetworkPath"))
     }
     deinit { monitor.cancel(); qualityTask?.cancel() }
+    /// Waits for the public-address and quality checks that are running (returns at once when none is).
+    func finishedChecks() async { await ipTask?.value; await qualityTask?.value }
     func runQuality(status: String) {
         guard !qualityRunning else { return }
         let revision = routeRevision

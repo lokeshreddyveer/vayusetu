@@ -25,7 +25,7 @@ extension AppStore {
         case .adblockOn: next.safariAdblockEnabled = true
         case .adblockOff: next.safariAdblockEnabled = false
         }
-        protectionNotice = await applySelection(next, confirmed: action == .networkOff)
+        protectionNotice = await applySelection(next, confirmed: action == .networkOff, source: "Shortcut")
     }
     /// Tells the Home Screen widget what is on, and only reloads it when that changed.
     func publishWidgetStatus() {

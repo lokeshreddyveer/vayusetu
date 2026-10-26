@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import json
 import plistlib
 import shutil
 import subprocess
 
 root = Path(__file__).resolve().parent.parent
+VERSION = json.loads((root / 'Configuration/Version.json').read_text())   # the one place the iPhone version lives
 rows = []
 for scheme in ['VayuSetu', 'VayuSetuVPN']:
     for platform in ['simulator', 'device']:
         app = root / 'dist' / f'{scheme}-{platform}.app'
         info = plistlib.loads((app / 'Info.plist').read_bytes())
-        assert info['CFBundleShortVersionString'] == '0.8.0'
+        assert info['CFBundleShortVersionString'] == VERSION['marketing'] and info['CFBundleVersion'] == VERSION['build']
         assert info['MinimumOSVersion'] == '17.0' and info['UIDeviceFamily'] == [1]
         assert (app / 'PrivacyInfo.xcprivacy').exists() and (app / 'ThirdPartyNotices.txt').exists()
         archs = subprocess.check_output(['xcrun', 'lipo', '-archs', str(app / info['CFBundleExecutable'])], text=True).strip()
         if platform == 'device':
             assert archs == 'arm64'
-        row = f'{scheme}-{platform}: version 0.8.0, iOS 17+, {archs}'
+        row = f'{scheme}-{platform}: version {VERSION["marketing"]} ({VERSION["build"]}), iOS 17+, {archs}'
         if scheme == 'VayuSetuVPN':
             ext = app / 'PlugIns/VayuSetuTunnel.appex'
             e = plistlib.loads((ext / 'Info.plist').read_bytes())

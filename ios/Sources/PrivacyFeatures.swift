@@ -17,6 +17,19 @@ struct LocalPrivacyEvent: Identifiable {
 }
 
 /// New filter metadata and privacy events live in SQLite; existing profile files retain their recovery semantics.
+/// The reporting period is one setting shared by Home and Adblock, remembered until the user changes it.
+enum ActivityPeriodStore {
+    static let key = "activity.period", customStartKey = "activity.custom.start", customEndKey = "activity.custom.end"
+    /// The range chosen for the custom period; the last 7 days until the user picks one.
+    static var customRange: ClosedRange<Date>? {
+        let defaults = UserDefaults.standard
+        let now = Date()
+        let from = (defaults.object(forKey: customStartKey) as? Double).map { Date(timeIntervalSince1970: $0) } ?? now.addingTimeInterval(-6 * 86400)
+        let to = (defaults.object(forKey: customEndKey) as? Double).map { Date(timeIntervalSince1970: $0) } ?? now
+        return from <= to ? from...to : to...from
+    }
+}
+
 final class PrivacyDatabase {
     private var db: OpaquePointer?
     init(url: URL? = nil) throws {
@@ -28,6 +41,8 @@ final class PrivacyDatabase {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         // The settings used to hold every downloaded rule; once they are small again the file keeps its old size until it is compacted.
         if ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 20_000_000, let stateSize = try? stateLength(), stateSize < 5_000_000 { try? execute("VACUUM") }
+        // Events that aged out while the app was closed go now, before anything reads them.
+        try? purgeEvents()
     }
     private func stateLength() throws -> Int {
         var statement: OpaquePointer?; defer { sqlite3_finalize(statement) }
@@ -51,19 +66,36 @@ final class PrivacyDatabase {
         let bound = data.withUnsafeBytes { sqlite3_bind_blob(statement, 1, $0.baseAddress, Int32($0.count), transient) }
         guard bound == SQLITE_OK, sqlite3_step(statement) == SQLITE_DONE else { throw AppIssue(message: "Could not save privacy preferences.") }
     }
-    func event(_ message: String) throws {
+    func event(_ message: String, at date: Date = Date()) throws {
         var statement: OpaquePointer?; defer { sqlite3_finalize(statement) }
         guard sqlite3_prepare_v2(db, "INSERT INTO events(time,message) VALUES(?,?)", -1, &statement, nil) == SQLITE_OK else { throw AppIssue(message: "Could not record privacy event.") }
-        sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
+        sqlite3_bind_double(statement, 1, date.timeIntervalSince1970)
         sqlite3_bind_text(statement, 2, message, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         guard sqlite3_step(statement) == SQLITE_DONE else { throw AppIssue(message: "Could not record privacy event.") }
-        let chosen = UserDefaults.standard.integer(forKey: "local-events-retention-days")
-        let days = [1,7,30].contains(chosen) ? chosen : 7
-        try execute("DELETE FROM events WHERE time < \(Date().addingTimeInterval(-Double(days)*86400).timeIntervalSince1970); DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 200);")
+        try purgeEvents(now: max(date, Date()))
     }
-    func recentEvents() -> [LocalPrivacyEvent] {
+    static let retentionKey = "local-events-retention-days"
+    /// The days events are kept: 1, 7 or 30. Anything else stored reads as 7.
+    static func retentionDays(_ chosen: Int = UserDefaults.standard.integer(forKey: retentionKey)) -> Int { [1, 7, 30].contains(chosen) ? chosen : 7 }
+    /// Removes events older than the retention setting, and any beyond the newest 200. Called when an event is recorded, when the store is opened,
+    /// the moment the setting changes, and when events are read, so shortening the period takes effect at once and not at the next event.
+    @discardableResult
+    func purgeEvents(retentionDays chosen: Int? = nil, now: Date = Date()) throws -> Int {
+        let before = eventCount()
+        let cutoff = now.addingTimeInterval(-Double(Self.retentionDays(chosen ?? Self.retentionDays())) * 86_400).timeIntervalSince1970
+        try execute("DELETE FROM events WHERE time < \(cutoff); DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 200);")
+        return max(0, before - eventCount())
+    }
+    func eventCount() -> Int {
         var statement: OpaquePointer?; defer { sqlite3_finalize(statement) }
-        guard sqlite3_prepare_v2(db, "SELECT id,time,message FROM events ORDER BY time DESC,id DESC LIMIT 200", -1, &statement, nil) == SQLITE_OK else { return [] }
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM events", -1, &statement, nil) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+    /// Events inside the retention period only: an event that has aged out is never returned, even in the moment before it is purged.
+    func recentEvents(now: Date = Date()) -> [LocalPrivacyEvent] {
+        let cutoff = now.addingTimeInterval(-Double(Self.retentionDays()) * 86_400).timeIntervalSince1970
+        var statement: OpaquePointer?; defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT id,time,message FROM events WHERE time >= \(cutoff) ORDER BY time DESC,id DESC LIMIT 200", -1, &statement, nil) == SQLITE_OK else { return [] }
         var result: [LocalPrivacyEvent] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             if let text = sqlite3_column_text(statement, 2) {
@@ -210,6 +242,8 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     @Published private(set) var activeListID: UUID?
     @Published private(set) var message = ""
     @Published private(set) var events: [String] = []
+    /// How many days events are kept (1, 7 or 30). Published so the setting on screen always shows what is in force.
+    @Published private(set) var eventRetention = PrivacyDatabase.retentionDays()
     @Published private(set) var recentEvents: [LocalPrivacyEvent] = []
     @Published private(set) var failureDetails = ""
     /// What a long operation is doing right now, for the screens to show.
@@ -434,9 +468,10 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     func activitySeries(_ period: ActivityPeriod, now: Date = .now) -> ActivitySeries {
         _ = statsRevision
         let calendar = Calendar.current
-        let start = period.start(now: now, calendar: calendar)
+        let custom = ActivityPeriodStore.customRange
+        let start = period == .custom ? custom.map { calendar.startOfDay(for: $0.lowerBound) } : period.start(now: now, calendar: calendar)
         let rows = database?.activity(fromBucket: Int((start?.timeIntervalSince1970 ?? 0) / 600)) ?? []
-        return ActivitySeries.make(period: period, rows: rows, now: now, calendar: calendar)
+        return ActivitySeries.make(period: period, rows: rows, now: now, calendar: calendar, custom: custom)
     }
     func clearActivity() { try? database?.clearActivity(); statsRevision += 1 }
     // MARK: Adblock test history
@@ -1058,6 +1093,20 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     }
     func record(_ message: String) { do { try database?.event(message); events = database?.events() ?? []; recentEvents = database?.recentEvents() ?? [] } catch { self.message = "Privacy event storage unavailable." } }
     func clearEvents() { do { try database?.clearEvents(); events = []; recentEvents = [] } catch { message = "Could not clear privacy events." } }
+    /// The period events are kept. Shortening it removes what is now outside it immediately.
+    func setEventRetention(_ days: Int) {
+        let kept = PrivacyDatabase.retentionDays(days)
+        UserDefaults.standard.set(kept, forKey: PrivacyDatabase.retentionKey)
+        eventRetention = kept
+        purgeExpiredEvents(refresh: true)
+    }
+    /// Removes events that have aged out and refreshes what is shown, when something was removed (or `refresh` is set). Safe to call often.
+    func purgeExpiredEvents(refresh: Bool = false) {
+        var removed = 0
+        do { removed = try database?.purgeEvents() ?? 0 } catch { message = "Could not apply the event retention period." }
+        guard removed > 0 || refresh else { return }
+        events = database?.events() ?? []; recentEvents = database?.recentEvents() ?? []
+    }
 }
 
 @MainActor final class SystemDNSController: ObservableObject {

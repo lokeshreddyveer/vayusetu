@@ -18,7 +18,37 @@ struct VSChecksScreen: View {
     @ObservedObject var store: AppStore
     @ObservedObject var tunnel: TunnelController
     @ObservedObject var network: NetworkDiagnostics
-    @State private var hasRun = false
+    private var run: CheckRun { store.checkRun }
+    /// Everything a result's meaning depends on. When any part changes, results taken under the old values are discarded, not left on screen.
+    var configurationSignature: String {
+        CheckRun.signature([store.endpoint, store.selectedDNS.map { $0.uuidString } ?? "", store.selected.map { $0.uuidString } ?? "", String(tunnel.status.rawValue), tunnel.protocolName,
+                            String(tunnel.localDNSRunning), network.routeRevision.uuidString, store.probeDomain, store.probeRecordType.title, String(store.expectNXDOMAIN)])
+    }
+    /// Cancels what is running and forgets every stored result of the Checks screen. Used when a run starts and when the configuration changes.
+    func discardResults() {
+        store.clearCheckResults(); network.invalidateIP(); tunnel.clearCheckEvidence()
+    }
+    /// A configuration change voids the run and everything it produced.
+    func configurationChanged() {
+        guard run.phase != .notRun || store.checkRun.configuration != "" || !store.result.isEmpty || network.ipv4Probe != nil || store.dnsVerification != nil || !tunnel.evidence.isEmpty else { return }
+        store.checkRun.invalidate(); discardResults()
+    }
+    /// Runs every available check, and calls the run complete only when each one has actually finished.
+    @MainActor func startRun() async {
+        discardResults()
+        let signature = configurationSignature
+        let token = store.checkRun.begin(configuration: signature)
+        // Anything cancelled above must finish unwinding before the same check is started again, or the new one would be refused as already running.
+        await store.finishedDNSTest(); await network.finishedChecks(); await tunnel.finishedVerification()
+        guard store.checkRun.token == token else { return }
+        if !store.endpoint.isEmpty { store.testDNS() }
+        network.checkIP(status: tunnel.statusText, counterSample: { tunnel.observedCounters() }, policyEvidence: tunnel.configuredPolicySummary)
+        network.runQuality(status: tunnel.statusText)
+        if tunnel.status == .connected { tunnel.refreshStats(); tunnel.verifyConnection(resolver: store.endpoint, includeIPProbes: false) }
+        await store.verifyLocalDNS()
+        await store.finishedDNSTest(); await network.finishedChecks(); await tunnel.finishedVerification()
+        store.checkRun.finish(token: token, configuration: configurationSignature)
+    }
     var health: TunnelHealth {
         TunnelHealth.assess(running: tunnel.running, connected: tunnel.status == .connected, kind: tunnel.protocolName, stats: tunnel.stats,
                             statsAge: tunnel.statsAge, uptime: tunnel.uptimeSeconds)
@@ -28,17 +58,14 @@ struct VSChecksScreen: View {
         AnyView(VSCardList {
             VSSection {
                 Button {
-                    hasRun = true; store.result = ""
-                    if !store.endpoint.isEmpty { store.testDNS() }
-                    network.checkIP(status: tunnel.statusText, counterSample: { tunnel.observedCounters() }, policyEvidence: tunnel.configuredPolicySummary)
-                    network.runQuality(status: tunnel.statusText)
-                    Task { await store.verifyLocalDNS() }
-                    if tunnel.status == .connected { tunnel.refreshStats(); tunnel.verifyConnection(resolver: store.endpoint, includeIPProbes: false) }
+                    Task { await startRun() }
                 } label: { Text(working ? "Running checks…" : "Run Available Checks") }.buttonStyle(VSActionStyle(primary: true)).disabled(working || tunnel.busy)
             } footer: { Text("Filtering requires controlled names and a reference resolver; run it separately. Provider attribution, packet-path proof and failure-isolation tests are unsupported here and are never marked passed.") }
             VSSection("Diagnostic coverage") {
-                Text(hasRun ? coverage : "Not tested").font(.headline)
-                if hasRun, !failedNames.isEmpty { Text("Failed: " + failedNames).font(.subheadline).foregroundStyle(.orange) }
+                Text(run.headline(coverage: coverage)).font(.headline)
+                if run.phase == .running { Text("Results are counted when every check has finished. Nothing from an earlier run or setup is included.").font(.footnote).foregroundStyle(.secondary) }
+                if run.phase == .done, let finished = run.finishedAt { Text("Finished \(finished.formatted(date: .omitted, time: .standard)) · \(resolverName)").font(.footnote).foregroundStyle(.secondary) }
+                if run.phase == .done, !failedNames.isEmpty { Text("Failed: " + failedNames).font(.subheadline).foregroundStyle(.orange) }
                 Text("Looks at the state of what is running: the tunnel, its handshake or answered DNS queries, a DNS lookup and your public IP. It cannot prove that no other app leaks, so it is not a privacy score.").font(.footnote).foregroundStyle(.secondary)
                 if working { ProgressView("Running supported checks…") }
             }
@@ -68,11 +95,12 @@ struct VSChecksScreen: View {
                 VSNavLink { VSTrafficScreen(store: store, tunnel: tunnel) } label: { VSRow(title: "Traffic", subtitle: trafficSummary, icon: "arrow.up.arrow.down") }
             }
         }.vsList().vsHeader("Checks")
-        .onAppear { if tunnel.status == .connected { tunnel.refreshStats() } }
-        .onChange(of: tunnel.status.rawValue) { _, _ in hasRun = false }
-        .onChange(of: network.routeRevision) { _, _ in hasRun = false }
-        .onChange(of: store.endpoint) { _, _ in hasRun = false }
-        .onChange(of: store.selected) { _, _ in hasRun = false })
+        .onAppear {
+            if tunnel.status == .connected { tunnel.refreshStats() }
+            // Results kept from an earlier visit are shown only if they were taken under the setup in force now.
+            if store.checkRun.configuration != configurationSignature { configurationChanged() }
+        }
+        .onChange(of: configurationSignature) { _, _ in configurationChanged() })
     }
     /// Only checks that apply to what is running now: a VPN has a handshake and public IP, DNS Only has answered queries and the DNS check.
     /// Every check that counts toward the summary, by name, so a failure says which one it was.
@@ -84,7 +112,7 @@ struct VSChecksScreen: View {
         case .limited, .starting: items.append(("Tunnel", nil))
         case .off: break
         }
-        if tunnel.localDNSRunning || tunnel.protocolName == "WireGuard", tunnel.running, let check = store.dnsVerification { items.append(("DNS through the tunnel", check.passed)) }
+        if tunnel.localDNSRunning || tunnel.protocolName == "WireGuard", tunnel.running, let check = store.dnsVerification, run.isFresh(check.date) { items.append(("DNS through the tunnel", check.passed)) }
         if !store.result.isEmpty && !store.testing { items.append(("DNS lookup", store.result.hasPrefix("Probe passed"))) }
         if let v4 = network.ipv4Probe { items.append(("Public IPv4", v4.address != nil)) }
         // No IPv6 is not a failure when the network has none or the tunnel blocks it on purpose; only an unexpected answer is flagged.

@@ -297,7 +297,6 @@ struct VSSettingsScreen: View {
     @ObservedObject var tunnel: TunnelController
     @AppStorage("appearance") private var appearance = "dark"
     @AppStorage("live-activity-enabled") private var liveActivityEnabled = false
-    @State private var resetting = false
     @StateObject private var checksNetwork = NetworkDiagnostics()
     @State private var removing = false
     var locked: Bool { tunnel.running || tunnel.busy || store.connectionOperation }
@@ -338,7 +337,6 @@ struct VSSettingsScreen: View {
             }
             VSSection("About") { VSRow(title: "VayuSetu", subtitle: "By R3dby", value: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "Development"); VSNavLink { VSCheckDetail(title: "Acknowledgements", explanation: "VayuSetu uses the WireGuard backend. Credentials are retained in this device’s Keychain.", output: notices) } label: { Text("Acknowledgements") }; VSNavLink { VSFilterCreditsScreen() } label: { Text("Filter list credits") } }
         }.vsList().vsHeader("Settings")
-        .vsConfirm(isPresented: $resetting, title: "Disable VayuSetu VPN and DNS?", message: "This stops automatic reconnect and removes managed VPN/DNS configuration. Profiles and keys are preserved. Safari filtering is controlled separately.", confirm: "Emergency Reset", destructive: true, icon: "power") { Task { await store.emergencyReset() } }
         .vsConfirm(isPresented: $removing, title: "Remove the saved VPN configuration?", message: "Your imported profiles and keys remain available.", confirm: "Remove", destructive: true, icon: "trash.fill") { Task { do { try await tunnel.removeConfiguration() } catch { store.notice = error.localizedDescription } } })
     }
     var notices: String { Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "WireGuard · https://www.wireguard.com" }

@@ -42,11 +42,34 @@ import AppKit
     private var pathAvailable = true
     private var pathSignature = ""
     @Published var statusObservedAt: Date?
-    @Published var status: NEVPNStatus = .invalid
+    @Published var status: NEVPNStatus = .invalid {
+        didSet {
+            // Each time a tunnel comes up it is a new session, so evidence from an earlier one is never attributed to this one.
+            if status == .connected, oldValue != .connected { sessionGeneration += 1; resolverSamples = [] }
+            if status == .disconnected || status == .invalid { resolverSamples = [] }
+        }
+    }
+    /// Counts tunnel sessions since the app started. It changes when a tunnel connects, never in between.
+    private(set) var sessionGeneration = 0
     @Published var busy = false
     @Published var ready = false
     @Published var message = ""
-    @Published var stats: TunnelStats?
+    @Published var stats: TunnelStats? { didSet { noteResolverSample() } }
+    /// Readings of the tunnel's resolver counters, newest last, for the current session only.
+    private(set) var resolverSamples: [ResolverSample] = []
+    private func noteResolverSample() {
+        guard let wire = stats?.dnsCounters?.upstream, status == .connected else { return }
+        let rtt = wire.rtt.map { Int(clamping: $0) }
+        resolverSamples = ResolverWindow.appending(resolverSamples, ResolverSample(date: Date(), answered: Int(clamping: wire.answered), timeouts: Int(clamping: wire.timeouts), errors: Int(clamping: wire.errors),
+                                                                                    cacheHits: Int(clamping: wire.cacheHits), rtt: rtt, generation: Int(clamping: wire.generation)))
+    }
+    /// What the tunnel's resolver did over the last ten minutes, or nil when the tunnel does not report it (an older tunnel, or no tunnel).
+    func resolverHealth(now: Date = Date()) -> ResolverHealth? {
+        ResolverWindow.health(resolverSamples, now: now, blockedLocally: Int(clamping: stats?.dnsCounters?.blocked ?? 0))
+    }
+    /// Monotonic sample number used by DNS activity ingestion. The counters are cumulative,
+    /// so observing only their value can be coalesced by SwiftUI when a sample is unchanged.
+    @Published private(set) var statsSampleRevision = 0
     @Published var configuredProfile: UUID?
     @Published var activeMode: RoutingMode?
     @Published var events: [String] = []
@@ -70,7 +93,9 @@ import AppKit
     private var workspaceObservers: [NSObjectProtocol] = []
     private var savedPreferencesSanitized = false
     #endif
-    static var available: Bool {
+    /// Read once: whether this copy is signed to run a VPN cannot change while it runs, and views ask on every update.
+    static var available: Bool { cachedAvailable }
+    private static let cachedAvailable: Bool = {
         #if VPN_ENABLED
         #if os(macOS)
         // Unsigned host builds must not attempt activation or mutate VPN preferences.
@@ -81,7 +106,7 @@ import AppKit
         #else
         return false
         #endif
-    }
+    }()
     var running: Bool { [.connected, .connecting, .reasserting, .disconnecting].contains(status) }
     var statusText: String {
         guard Self.available else { return "Preview build" }
@@ -268,6 +293,7 @@ import AppKit
                 if sessionID == nil { sessionID = UUID(); sessionStart = manager?.connection.connectedDate ?? Date(); sessionElapsedOffset = Int64(max(0, Date().timeIntervalSince(sessionStart!))); sessionStartedAt = .now }
                 startSampling()
                 if lookupsOn { Task { try? await Task.sleep(for: .seconds(2)); self.pushLookupSetting() } }
+                if domainCounting { Task { try? await Task.sleep(for: .seconds(2)); self.pushDomainSetting() } }
                 #if os(macOS)
                 reloadDNSRules()   // the root tunnel cannot read this user's App Group file, so hand it the rules
                 Task { try? await Task.sleep(for: .seconds(3)); self.reloadDNSRules() }   // once more: the tunnel may not have been ready for the first message
@@ -514,6 +540,29 @@ import AppKit
         }
         guard let data, let new = try? JSONDecoder().decode([DNSQueryEntry].self, from: data), !new.isEmpty else { return }
         lookups = Array((lookups + new).suffix(400))
+    }
+    // MARK: Optional domain history (counts per domain, collected from the tunnel and kept by the app)
+    @Published private(set) var domainHistoryOn = UserDefaults.standard.bool(forKey: "domain-history-on")
+    /// The live "tunnel gate" view also needs the tunnel's per-domain counts, but keeps nothing: it only draws them.
+    @Published private(set) var liveGateOn = UserDefaults.standard.bool(forKey: "live-gate-on")
+    var domainCounting: Bool { domainHistoryOn || liveGateOn }
+    func setLiveGate(_ on: Bool) { liveGateOn = on; UserDefaults.standard.set(on, forKey: "live-gate-on"); pushDomainSetting() }
+    /// True while a tunnel that filters DNS is connected: the local DNS tunnel, or a WireGuard tunnel that hosts the DNS filter.
+    var domainsAvailable: Bool { status == .connected && (localDNSRunning || (protocolName == "WireGuard" && stats?.dnsCounters != nil)) }
+    func setDomainHistory(_ on: Bool) { domainHistoryOn = on; UserDefaults.standard.set(on, forKey: "domain-history-on"); pushDomainSetting() }
+    /// Tells the tunnel to start or stop counting per domain. The tunnel forgets this when it restarts, so it is sent again on every connect.
+    func pushDomainSetting() {
+        guard domainsAvailable, let session = manager?.connection as? NETunnelProviderSession else { return }
+        try? session.sendProviderMessage(TunnelDiagnosticRequest.domains(on: domainCounting)) { _ in }
+    }
+    /// The counts since the last call (the tunnel empties its tally), or nil when the tunnel cannot be asked.
+    func takeDomains() async -> [DomainCount]? {
+        guard domainCounting, domainsAvailable, let session = manager?.connection as? NETunnelProviderSession else { return nil }
+        let data: Data? = await withCheckedContinuation { continuation in
+            do { try session.sendProviderMessage(TunnelDiagnosticRequest.domainsTake) { continuation.resume(returning: $0) } } catch { continuation.resume(returning: nil) }
+        }
+        guard let data else { return nil }
+        return try? JSONDecoder().decode([DomainCount].self, from: data)
     }
     /// ADR-011 spike: starts the local DNS-only tunnel. No WireGuard profile or remote server is involved,
     /// and only the virtual DNS address is routed into the tunnel. "Tunnel established" is not DNS evidence:
@@ -833,6 +882,7 @@ import AppKit
                         } else { self.rateSampleAvailable = false; self.receivedPerSecond = 0; self.sentPerSecond = 0 }
                     }
                     self.lastSample = (now, decoded); self.stats = decoded; self.statsRecordedAt = Date()
+                    self.statsSampleRevision &+= 1
                     self.trafficPoints.append(TrafficPoint(date: Date(), received: self.receivedPerSecond, sent: self.sentPerSecond))
                     self.trafficPoints = Array(self.trafficPoints.suffix(120))
                     self.checkUsage(decoded)
@@ -893,8 +943,19 @@ import AppKit
             }
         }
     }
+    /// The connection deadline, stretched while this computer is overloaded. A tunnel that is still starting on a Mac running a long build (load
+    /// well above its core count) is slow, not dead, and stopping it at the normal deadline only starts the whole thing again.
+    static func loadAdjustedTimeout(_ base: Int, load: Double, cores: Int) -> Int {
+        let ratio = load / Double(max(1, cores))
+        let factor = ratio > 3 ? 2.0 : (ratio > 1.5 ? 1.5 : 1.0)
+        return min(180, Int((Double(base) * factor).rounded()))
+    }
     private func armWatchdog() {
-        watchdog?.cancel(); let id = lifecycleID; let timeout = max(10, min(120, connectionTimeout))
+        watchdog?.cancel(); let id = lifecycleID
+        let base = max(10, min(120, connectionTimeout))
+        var load = [Double](repeating: 0, count: 1)
+        let timeout = getloadavg(&load, 1) == 1 ? Self.loadAdjustedTimeout(base, load: load[0], cores: ProcessInfo.processInfo.activeProcessorCount) : base
+        if timeout > base { record("This computer is busy (load \(Int(load[0]))); the connection deadline is \(timeout) s instead of \(base) s", severity: .info) }
         watchdog = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(timeout)) } catch { return }
             guard let self, self.lifecycleID == id, self.status != .connected, self.wantedConnection else { return }
@@ -958,6 +1019,8 @@ import AppKit
         if protocolName == "IKEv2" { return "OS reports connected; route details unavailable" }
         return currentAppliedPolicy == nil ? "Acceptance evidence unavailable" : "Tunnel settings accepted by iOS"
     }
+    /// Whether the saved system VPN configuration asks macOS to capture all traffic (nil when it cannot be read).
+    var savedStrictCapture: Bool? { manager?.protocolConfiguration.map { $0.includeAllNetworks } }
     var configuredPolicySummary: String {
         guard let proto = manager?.protocolConfiguration else { return "No saved VPN policy." }
         return "Saved system configuration\nStrict capture: \(proto.includeAllNetworks) · enforce routes: \(proto.enforceRoutes)\nLocal network exception: \(proto.excludeLocalNetworks) · on-demand: \(manager?.isOnDemandEnabled == true)\n" + (currentAppliedPolicy?.summary ?? "No current accepted-settings evidence from this extension.") + "\nOS-required traffic exceptions may remain. This does not prove fail-closed behavior during crashes, network transitions or manual disconnect."
@@ -982,6 +1045,10 @@ import AppKit
         #endif
         return lines.joined(separator: "\n")
     }
+    /// Waits for the connection verification to finish (returns at once when none is running).
+    func finishedVerification() async { await healthTask?.value }
+    /// Forgets the verification evidence of an earlier run or configuration.
+    func clearCheckEvidence() { healthTask?.cancel(); checkingHealth = false; evidence = [] }
     func verifyConnection(resolver: String, includeIPProbes: Bool = true) {
         guard status == .connected, !checkingHealth else { return }
         let id = lifecycleID; let revision = statusRevision

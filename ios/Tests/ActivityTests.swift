@@ -35,7 +35,15 @@ import Foundation
         let fall = calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 20))!
         let dst = ActivitySeries.make(period: .today, rows: [bucket(calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 9))!, 9, 3)], now: fall, calendar: calendar)
         check(dst.requests == 9 && dst.blocked == 3)
-        check(ActivityPeriod.allCases.map(\.title) == ["Today", "24 Hours", "7 Days", "30 Days", "All Time"])
+        check(ActivityPeriod.allCases.map(\.title) == ["Live (last hour)", "Today", "24 Hours", "7 Days", "30 Days", "1 Year", "All Time", "Custom range"])
+        // The periods added after the first release: the last hour is seven recorded slices, a year is 365 days, a custom range needs its own dates.
+        let liveSeries = ActivitySeries.make(period: .hour, rows: [bucket(now.addingTimeInterval(-300), 4, 1), bucket(now.addingTimeInterval(-7200), 99, 9)], now: now, calendar: calendar)
+        check(liveSeries.points.count == 7 && liveSeries.requests == 4 && liveSeries.blocked == 1)
+        check(ActivityPeriod.year.start(now: now, calendar: calendar) == calendar.date(byAdding: .day, value: -364, to: calendar.startOfDay(for: now)))
+        check(ActivityPeriod.custom.start(now: now, calendar: calendar) == nil)
+        check(ActivitySeries.make(period: .custom, rows: [bucket(now, 5, 0)], now: now, calendar: calendar, custom: nil).points.isEmpty)
+        let two = calendar.startOfDay(for: now.addingTimeInterval(-86400 * 3))...calendar.startOfDay(for: now.addingTimeInterval(-86400 * 2))
+        check(ActivitySeries.make(period: .custom, rows: [bucket(two.lowerBound.addingTimeInterval(3600), 7, 2), bucket(now, 50, 5)], now: now, calendar: calendar, custom: two).requests == 7)
         print("Activity model checks passed: \(count)")
     }
 }
