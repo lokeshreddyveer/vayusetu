@@ -509,7 +509,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -742,7 +742,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -873,7 +873,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_PREVIEWS</key>
@@ -970,7 +970,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -1167,7 +1167,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -1486,7 +1486,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -1635,7 +1635,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -1754,7 +1754,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_PREVIEWS</key>
@@ -1999,7 +1999,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -2094,7 +2094,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_USER_SCRIPT_SANDBOXING</key>
@@ -2317,7 +2317,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_USER_SCRIPT_SANDBOXING</key>
@@ -2470,7 +2470,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -2928,7 +2928,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_PREVIEWS</key>
@@ -2987,7 +2987,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>ENABLE_PREVIEWS</key>
@@ -3162,7 +3162,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3411,7 +3411,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3468,7 +3468,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3510,7 +3510,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3601,7 +3601,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3787,7 +3787,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -3909,7 +3909,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
@@ -4058,7 +4058,7 @@
 				<key>CODE_SIGN_STYLE</key>
 				<string>Automatic</string>
 				<key>CURRENT_PROJECT_VERSION</key>
-				<string>28</string>
+				<string>29</string>
 				<key>DEVELOPMENT_TEAM</key>
 				<string>X4MH29QNRS</string>
 				<key>GENERATE_INFOPLIST_FILE</key>
