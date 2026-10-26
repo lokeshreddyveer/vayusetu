@@ -40,6 +40,7 @@ step "Mac version configuration is consistent (scripts/version.json)" python3 ma
 step "iPhone version configuration is consistent (Configuration/Version.json)" python3 ios/scripts/check-versions.py
 step "no unreachable dialogs in any screen (a confirmation nothing can open)" python3 ios/scripts/check-dead-state.py
 step "no force unwraps or force-try that input can reach" python3 ios/scripts/check-unwraps.py
+step "no animation that runs forever or cannot pause" python3 ios/scripts/check-animations.py
 step "build status document matches the versions and recorded runs" python3 ios/scripts/build-status.py --check
 say ""
 

@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import VayuSetuCore
 
 /// A piece of text a scene draws. Scenes hand these to the Canvas as symbols, so each is laid out once by SwiftUI instead of being
 /// re-typeset every frame, which is what made the first version heavy.
@@ -184,11 +186,19 @@ enum SceneDraw {
 /// another window costs no power.
 struct SceneTimeline<Content: View>: View {
     @Environment(\.controlActiveState) private var active
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Seconds between frames. A scene that is only idling does not need the full rate.
     var interval = SceneDraw.frameInterval
+    /// True when the scene has nothing to show that changes (protection off): it keeps its last frame and draws no more.
+    var held = false
     @ViewBuilder let content: (TimelineViewDefaultContext) -> Content
     var body: some View {
-        TimelineView(.animation(minimumInterval: interval, paused: active == .inactive)) { context in content(context) }
+        // Every few seconds this asks whether anybody is there to see the animation; the frames themselves stop when nobody is.
+        TimelineView(.periodic(from: .now, by: 5)) { _ in
+            let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+            let runs = SceneActivity.animates(windowActive: active != .inactive, held: held, idleSeconds: idle, reduceMotion: reduceMotion)
+            TimelineView(.animation(minimumInterval: interval, paused: !runs)) { context in content(context) }
+        }
     }
 }
 

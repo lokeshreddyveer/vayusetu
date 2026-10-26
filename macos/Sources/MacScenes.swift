@@ -28,7 +28,7 @@ struct MacRouteScene: View {
             if reduceMotion || !animated {
                 Text(summary).font(.system(size: 12)).foregroundStyle(.secondary)
             } else {
-                SceneTimeline(interval: store.powerTone == .off ? SceneDraw.idleFrameInterval : SceneDraw.frameInterval) { timeline in
+                SceneTimeline(interval: SceneDraw.frameInterval, held: store.powerTone == .off || store.powerTone == .error) { timeline in
                     let tone = store.powerTone, rate = tracker.down + tracker.up, serverName = store.active?.name ?? "VPN server"
                     let symbols = SceneDraw.nodeSymbols(["This Mac", "Internet", "VayuSetu DNS", SceneDraw.short(serverName, 18)])
                     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: true) { context, size in
@@ -375,6 +375,13 @@ struct MacSetupRoad: View {
     let total: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
+    /// The marker pulses a few times when it appears or moves, then rests. Pulsing forever redraws every frame for as long as the window is open.
+    private func pulseMarker() {
+        guard !reduceMotion, done < total else { return }
+        pulse = false
+        withAnimation(.easeInOut(duration: 1.1).repeatCount(SceneActivity.pulseCycles * 2, autoreverses: true)) { pulse = true }
+        Task { try? await Task.sleep(for: .seconds(1.1 * Double(SceneActivity.pulseCycles * 2) + 0.2)); withAnimation(.easeOut(duration: 0.3)) { pulse = false } }
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -396,7 +403,8 @@ struct MacSetupRoad: View {
             }
         }
         .frame(height: 26)
-        .onAppear { withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { pulse = true } }
+        .onAppear { pulseMarker() }
+        .onChange(of: done) { _, _ in pulseMarker() }
         .accessibilityElement(children: .ignore).accessibilityLabel("\(done) of \(total) steps done")
     }
 }

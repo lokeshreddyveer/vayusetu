@@ -27,7 +27,12 @@ enum Page: String, CaseIterable, Identifiable {
         guard parts.count == 2 else { return }
         // One request for both, so the app plans a single start instead of two in a row. `both/on` is VPN + DNS; `both/off` stops the network side.
         if parts[0] == "both" {
-            if parts[1] == "on" { await withCheckedContinuation { continuation in extensions.activate { Task { await store.chooseMode(vpn: true, dns: true, source: "link"); continuation.resume() } } } }
+            if parts[1] == "on" {
+                await withCheckedContinuation { continuation in
+                    extensions.activate(onReady: { Task { await store.chooseMode(vpn: true, dns: true, source: "link"); continuation.resume() } },
+                                        onFailure: { reason in store.tunnel.record("Protection request from link finished: not started (\(reason))", severity: .error, category: "protection"); continuation.resume() })
+                }
+            }
             else if parts[1] == "off" { await store.powerOffNetwork(source: "link") }
             return
         }
@@ -41,7 +46,12 @@ enum Page: String, CaseIterable, Identifiable {
         // "on" and "off" are explicit values and "toggle" is relative to what is running now. Asking for what is already so changes nothing.
         guard let wanted = ProtectionRequestPolicy.linkValue(parts[1], control: control, observed: store.observedSelection.target) else { return }
         if pill == .adblock { await store.setPill(pill, enabled: wanted, source: "link") }
-        else { await withCheckedContinuation { continuation in extensions.activate { Task { await store.setPill(pill, enabled: wanted, source: "link"); continuation.resume() } } } }
+        else {
+            await withCheckedContinuation { continuation in
+                extensions.activate(onReady: { Task { await store.setPill(pill, enabled: wanted, source: "link"); continuation.resume() } },
+                                    onFailure: { reason in store.tunnel.record("Protection request from link finished: not started (\(reason))", severity: .error, category: "protection"); continuation.resume() })
+            }
+        }
     }
     var body: some Scene {
         Window("VayuSetu", id: "main") { DesktopView(store: store, extensions: extensions, filterClient: filterClient).onOpenURL { url in if !filterClient.handle(url: url) { Task { await handleProtectionLink(url) } } }.frame(minWidth: 940, minHeight: 620).preferredColorScheme(appearance == "system" ? nil : appearance == "light" ? .light : .dark).tint(VSDesign.accent).frame(minWidth: 760, minHeight: 560) }.defaultSize(width: 1080, height: 740)
@@ -130,6 +140,7 @@ struct DesktopView: View {
         .task {
             // Re-submit the bundled filter on every launch so macOS can replace
             // an older active system extension after an app update.
+            extensions.report = { [tunnel] text, severity in tunnel.record(text, severity: severity, category: "extension") }
             extensions.activateFilter()
             filterClient.startPolling()
             DomainHistoryStore.shared.startCollecting(tunnel: tunnel)
