@@ -396,12 +396,14 @@ struct TunnelHealth: Equatable {
 struct TunnelDiagnosticRequest: Codable {
     let version: Int
     let operation: String
-    static var statistics: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "statistics")) }
+    /// Two plain fields cannot fail to encode; an empty payload would be rejected by the receiver rather than crash the sender.
+    private static func encoded(_ operation: String) -> Data { (try? JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: operation))) ?? Data() }
+    static var statistics: Data { encoded("statistics") }
     /// Asks the local DNS tunnel to reload the compiled filter snapshot; the reply is the usual statistics.
-    static var reloadRules: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "reload-rules")) }
+    static var reloadRules: Data { encoded("reload-rules") }
     /// Switches the tunnel's in-memory lookup list on or off, and asks for the entries after a given number.
-    static func lookups(on: Bool) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: on ? "lookups-on" : "lookups-off")) }
-    static func lookupsAfter(_ id: UInt64) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "lookups:\(id)")) }
+    static func lookups(on: Bool) -> Data { encoded(on ? "lookups-on" : "lookups-off") }
+    static func lookupsAfter(_ id: UInt64) -> Data { encoded("lookups:\(id)") }
     static func lookupsRequest(_ data: Data) -> (on: Bool?, after: UInt64?)? {
         guard data.count <= 256, let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1 else { return nil }
         if value.operation == "lookups-on" { return (true, nil) }
@@ -410,8 +412,8 @@ struct TunnelDiagnosticRequest: Codable {
         return nil
     }
     /// The optional domain history: switch the tunnel's per-domain counting on or off, and take the counts since the last take.
-    static func domains(on: Bool) -> Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: on ? "domains-on" : "domains-off")) }
-    static var domainsTake: Data { try! JSONEncoder().encode(TunnelDiagnosticRequest(version: 1, operation: "domains-take")) }
+    static func domains(on: Bool) -> Data { encoded(on ? "domains-on" : "domains-off") }
+    static var domainsTake: Data { encoded("domains-take") }
     /// nil for anything that is not a domain request; otherwise true/false for on/off, or nil inside for a take.
     static func domainsRequest(_ data: Data) -> (on: Bool?, take: Bool)? {
         guard data.count <= 256, let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1 else { return nil }

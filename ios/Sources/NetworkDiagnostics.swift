@@ -65,7 +65,7 @@ import Combine
             for _ in 0..<5 {
                 if Task.isCancelled { self.qualityMessage = "Check cancelled; partial results were discarded."; return }
                 do {
-                    var request = URLRequest(url: URL(string: "https://api64.ipify.org?format=json&probe=" + UUID().uuidString)!)
+                    var request = URLRequest(url: URL(string: "https://api64.ipify.org?format=json&probe=" + UUID().uuidString) ?? URL(string: "https://api64.ipify.org?format=json")!)
                     request.timeoutInterval = 8; request.cachePolicy = .reloadIgnoringLocalCacheData
                     let start = ContinuousClock.now
                     let (bytes, response) = try await session.bytes(for: request)
@@ -117,7 +117,7 @@ import Combine
             let session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
             defer { session.invalidateAndCancel() }
             func request(_ path: String, method: String = "GET") -> URLRequest {
-                var r = URLRequest(url: URL(string: "https://speed.cloudflare.com/" + path)!)
+                var r = URLRequest(url: URL(string: "https://speed.cloudflare.com/" + path) ?? URL(string: "https://speed.cloudflare.com/")!)
                 r.httpMethod = method; r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 15; return r
             }
             // Latency: the median of five tiny requests (the first one pays for the TLS handshake and is dropped).

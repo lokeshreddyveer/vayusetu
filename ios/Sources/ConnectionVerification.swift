@@ -109,17 +109,17 @@ private final class ResolverReply: @unchecked Sendable {
 enum DNSProviderSite: String, CaseIterable, Identifiable, Sendable {
     case controlD = "Control D", nextDNS = "NextDNS", adguard = "AdGuard", cloudflare = "Cloudflare", quad9 = "Quad9", browserLeaks = "BrowserLeaks", dnsLeakTest = "DNSLeakTest"
     var id: String { rawValue }
-    var website: URL { URL(string: {
+    var website: URL {
         switch self {
-        case .controlD: return "https://controld.com/status"
-        case .nextDNS: return "https://test.nextdns.io/"
-        case .adguard: return "https://adguard.com/en/test.html"
-        case .cloudflare: return "https://one.one.one.one/help"
-        case .quad9: return "https://on.quad9.net/"
-        case .browserLeaks: return "https://browserleaks.com/dns"
-        case .dnsLeakTest: return "https://www.dnsleaktest.com/"
+        case .controlD: return URL(string: "https://controld.com/status")!
+        case .nextDNS: return URL(string: "https://test.nextdns.io/")!
+        case .adguard: return URL(string: "https://adguard.com/en/test.html")!
+        case .cloudflare: return URL(string: "https://one.one.one.one/help")!
+        case .quad9: return URL(string: "https://on.quad9.net/")!
+        case .browserLeaks: return URL(string: "https://browserleaks.com/dns")!
+        case .dnsLeakTest: return URL(string: "https://www.dnsleaktest.com/")!
         }
-    }())! }
+    }
     static let providers: [Self] = [.controlD, .nextDNS, .adguard, .cloudflare, .quad9]
     static func selected(endpoint: String) -> Self? {
         guard let host = URL(string: endpoint)?.host?.lowercased() else { return nil }
@@ -222,7 +222,8 @@ enum ProviderVerificationProbe {
                 if let target = nextDNSHandoff(initial) { data = try await fetch(target) } else { data = initial }
             } else if provider == .adguard {
                 let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-                data = try await fetch(URL(string: "https://\(nonce)-dnscheck.adguard-dns.com/dnscheck/test")!)
+                guard let target = URL(string: "https://\(nonce)-dnscheck.adguard-dns.com/dnscheck/test") else { throw AppIssue(message: "Could not build the AdGuard check address.") }
+                data = try await fetch(target)
             } else { data = try await fetch(provider.website) }
             let parsed = parse(data, provider: provider)
             return .init(provider: provider, verdict: parsed.0, date: Date(), method: method, detail: parsed.1)

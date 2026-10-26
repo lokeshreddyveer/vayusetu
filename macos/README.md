@@ -27,7 +27,7 @@ VPN → DNS is the implemented configuration. DNS → VPN remains blocked pendin
 
 Preview metadata: ~/Library/Application Support/VayuSetu. VPN metadata: ~/Library/Application Support/VayuSetuVPN. Saved credentials remain in the device-local Keychain; a tunnel-start secret is sent in memory to the system extension. Build 20 removes the older plaintext copy from saved VPN preferences when the app loads them. Preview credentials and iPhone data are not transferred automatically. A signed VPN build uses its provisioned shared Keychain group.
 
-Validation includes both architectures, app/extension signatures, WireGuard implementation symbols and release provisioning. UI interactions and live packet paths remain separate verification gates.
+Validation includes both architectures, app/extension signatures, WireGuard implementation symbols and release provisioning. What has and has not been observed on a running Mac is recorded in `ios/BUILD-STATUS.md`, which is generated from the recorded test runs; read it rather than this line.
 
 
 Feature expansion: encrypted backups/restores, DoT, custom DNS test domains, HTTPS quality history, live traffic charts, per-profile usage, data alerts, persistent sanitized logs, configurable retry/timeouts and optional native IPv6. Current limitations and verification status: [capability matrix](../Docs/Architecture/Implementation-Gaps.md).

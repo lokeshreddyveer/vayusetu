@@ -71,8 +71,8 @@ enum ProfileParser {
         var publicKeys = Set<String>()
         var routeOwners: [String: String] = [:]
         for peer in peers {
-            guard validKey(peer["PublicKey"]) else { throw AppIssue(message: "Each peer requires a valid public key.") }
-            guard publicKeys.insert(peer["PublicKey"]!).inserted else { throw AppIssue(message: "Peer public keys must be unique.") }
+            guard validKey(peer["PublicKey"]), let owner = peer["PublicKey"] else { throw AppIssue(message: "Each peer requires a valid public key.") }
+            guard publicKeys.insert(owner).inserted else { throw AppIssue(message: "Peer public keys must be unique.") }
             if let key = peer["PresharedKey"], !validKey(key) { throw AppIssue(message: "Invalid preshared key.") }
             let allowed = list(peer["AllowedIPs"])
             guard !allowed.isEmpty, allowed.allSatisfy(validCIDR) else { throw AppIssue(message: "Each peer requires valid AllowedIPs CIDR routes.") }
@@ -80,7 +80,6 @@ enum ProfileParser {
             if let keepalive = peer["PersistentKeepalive"], !(Int(keepalive).map { (0...65535).contains($0) } ?? false) { throw AppIssue(message: "Invalid keepalive interval.") }
             for route in allowed {
                 let canonical = canonicalCIDR(route)
-                let owner = peer["PublicKey"]!
                 if let existing = routeOwners[canonical], existing != owner {
                     throw AppIssue(message: "Two peers claim the same network route. Assign each network to one peer.")
                 }

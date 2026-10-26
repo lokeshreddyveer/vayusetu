@@ -292,8 +292,7 @@ final class FilterStore {
     /// Answers a waiting connection. `allow == nil` means the question timed out and the default action applies.
     @discardableResult func resolve(_ id: Int64, settings answer: Bool?, remember: Bool, rule chosen: NetRule? = nil, timedOut: Bool = false) -> Bool {
         lock.lock()
-        guard waiting[id] != nil else { lock.unlock(); return false }
-        let seed = waiting[id]!.question
+        guard let seed = waiting[id]?.question else { lock.unlock(); return false }
         // In balanced mode one user decision applies to all sockets from the
         // same app that arrived while the alert was on screen.
         let ids = self.settings.askPolicy == .everyConnection
@@ -442,7 +441,7 @@ final class FilterService: NSObject, NSXPCListenerDelegate, VayuFilterXPC {
     func lists(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentLists())) ?? Data("[]".utf8)) }
     func setLists(_ data: Data, reply: @escaping (Bool) -> Void) {
         guard data.count < 60_000_000, let lists = try? decoder.decode([NetList].self, from: data), lists.count <= 50,
-              lists.allSatisfy({ $0.entries.count <= NetList.maximumEntries && ($0.source == nil || (URL(string: $0.source!)?.scheme?.lowercased() == "https" && URL(string: $0.source!)?.user == nil && URL(string: $0.source!)?.password == nil)) }) else { reply(false); return }
+              lists.allSatisfy({ list in list.entries.count <= NetList.maximumEntries && (list.source.map { text in URL(string: text).map { $0.scheme?.lowercased() == "https" && $0.user == nil && $0.password == nil } ?? false } ?? true) }) else { reply(false); return }
         store.setLists(Array(lists.prefix(50))); reply(true)
     }
     func usage(reply: @escaping (Data) -> Void) { reply((try? encoder.encode(store.currentUsage())) ?? Data("{}".utf8)) }

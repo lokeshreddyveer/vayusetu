@@ -570,7 +570,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     /// Safari extensions are enabled. A DNS filter that is already blocking the name makes the check inconclusive.
     func testBlocking() async -> String {
         guard let directory = packageDirectory else { return "The shared rules folder is unavailable." }
-        let store = WKContentRuleListStore.default()!
+        guard let store = WKContentRuleListStore.default() else { return "WebKit’s rule store is unavailable." }
         var lists: [WKContentRuleList] = []
         for id in SafariExtensionID.allCases {
             guard let data = try? Data(contentsOf: directory.appendingPathComponent(id.fileName)), let text = String(data: data, encoding: .utf8), (configuration.safariExtensionRules?[id.rawValue] ?? 0) > 0 else { continue }
@@ -931,7 +931,8 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         // Ask WebKit to compile every non-empty slice first. A rejected rule fails the update and leaves the previous rules alone.
         var rejection: String?
         for id in SafariExtensionID.allCases where (compiled[id]?.applied ?? 0) > 0 {
-            do { try await validateWithWebKit(id, compiled[id]!.data) } catch { rejection = error.localizedDescription; break }
+            guard let data = compiled[id]?.data else { continue }
+            do { try await validateWithWebKit(id, data) } catch { rejection = error.localizedDescription; break }
         }
         if let rejection {
             // The selection still counts: save it, keep DNS filtering in step, and leave Safari on its previous rules.
@@ -973,7 +974,8 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         for id in changed {
             let url = directory.appendingPathComponent(id.fileName)
             do {
-                try compiled[id]!.data.write(to: url, options: .atomic)
+                guard let data = compiled[id]?.data else { continue }
+                try data.write(to: url, options: .atomic)
                 if extensionStates[id]?.enabled == false { waiting.append(id); extensionStates[id]?.reloaded = false; continue }   // Safari loads it when the user enables it
                 guard (compiled[id]?.applied ?? 0) > 0 || previous[id] != nil else { extensionStates[id]?.reloaded = true; continue }       // untouched empty slice
                 // Only an extension known to be on gets the long wait; if Safari's state is unknown, do not leave the switch spinning.
@@ -1024,7 +1026,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         do {
             guard var current = try JSONSerialization.jsonObject(with: previous) as? [[String: Any]], current.count < SafariRuleCompiler.ruleLimit else { throw FilteringIssue.capacity }
             let probe = try FilterRule(domain: UUID().uuidString.lowercased() + ".invalid", action: .block, scope: .exact)
-            let row = try JSONSerialization.jsonObject(with: SafariRuleCompiler.compile([probe])) as! [[String: Any]]
+            guard let row = try JSONSerialization.jsonObject(with: SafariRuleCompiler.compile([probe])) as? [[String: Any]] else { throw FilteringIssue.capacity }
             current.append(contentsOf: row)
             try JSONEncoder().encode(SafariUpdateJournal(previous: [SafariExtensionID.custom.rawValue: previous], pendingGeneration: UUID())).write(to: journalURL, options: .atomic)
             try JSONSerialization.data(withJSONObject: current).write(to: url, options: .atomic)
@@ -1242,7 +1244,8 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
             do {
                 var components = URLComponents(string: "https://stat.ripe.net/data/network-info/data.json")!
                 components.queryItems = [URLQueryItem(name: "resource", value: address)]
-                let (bytes, response) = try await session.bytes(from: components.url!)
+                guard let lookupURL = components.url else { throw AppIssue(message: "Could not build the ASN lookup address.") }
+                let (bytes, response) = try await session.bytes(from: lookupURL)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw AppIssue(message: "ASN lookup returned an unsuccessful HTTP response.") }
                 var data = Data(); for try await byte in bytes { data.append(byte); guard data.count <= 64_000 else { throw AppIssue(message: "ASN response exceeds its size limit.") }; try Task.checkCancellation() }
                 let output = try ASNResponse.parse(data)

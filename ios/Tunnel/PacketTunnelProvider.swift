@@ -241,7 +241,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if pair[0] == "tx_bytes" { stats.sent = stats.sent &+ number }
                 if pair[0] == "last_handshake_time_sec", number > 0 {
                     let date = Date(timeIntervalSince1970: TimeInterval(number))
-                    if stats.latestHandshake == nil || date > stats.latestHandshake! { stats.latestHandshake = date }
+                    if stats.latestHandshake.map({ date > $0 }) ?? true { stats.latestHandshake = date }
                 }
             }
             completionHandler(try? JSONEncoder().encode(stats))

@@ -92,8 +92,11 @@ enum PublicIPProbe {
     }
     static func endpoints(_ family: IPFamily) -> [IPEndpoint] {
         // Fixed public constants are validated at construction and before transport.
-        [IPEndpoint(provider: "ipify", url: try! endpointURL(host: family == .ipv4 ? "api.ipify.org" : "api6.ipify.org", json: true), format: .json),
-         IPEndpoint(provider: "ident.me", url: try! endpointURL(host: family == .ipv4 ? "4.ident.me" : "6.ident.me", json: false), format: .text)]
+        // A construction failure drops that endpoint; the probe then reports it as unavailable instead of crashing.
+        [(provider: "ipify", host: family == .ipv4 ? "api.ipify.org" : "api6.ipify.org", json: true, format: IPEndpoint.Format.json),
+         (provider: "ident.me", host: family == .ipv4 ? "4.ident.me" : "6.ident.me", json: false, format: IPEndpoint.Format.text)].compactMap { item in
+            (try? endpointURL(host: item.host, json: item.json)).map { IPEndpoint(provider: item.provider, url: $0, format: item.format) }
+        }
     }
     static func canonical(_ value: String, family: IPFamily) -> String? {
         var bytes = [UInt8](repeating: 0, count: 16); var output = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
@@ -122,8 +125,8 @@ enum PublicIPProbe {
     static func fetch(_ endpoint: IPEndpoint) async throws -> (Data, Int) { try await transport(endpoint, requestTimeout: requestTimeout, resourceTimeout: resourceTimeout) }
     /// Diagnostic control reproduces the original request without adding a bypass.
     static func legacyControl(family: IPFamily? = nil) async -> IPAttempt {
-        let host = family == .ipv4 ? "api.ipify.org" : family == .ipv6 ? "api6.ipify.org" : "api64.ipify.org"
-        let endpoint = IPEndpoint(provider: "ipify original empty-path control", url: URL(string: "https://" + host + "?format=json")!, format: .json)
+        let url = family == .ipv4 ? URL(string: "https://api.ipify.org?format=json")! : family == .ipv6 ? URL(string: "https://api6.ipify.org?format=json")! : URL(string: "https://api64.ipify.org?format=json")!
+        let endpoint = IPEndpoint(provider: "ipify original empty-path control", url: url, format: .json)
         let date = Date(); let start = ContinuousClock.now
         do {
             let (data, status) = try await transport(endpoint, requestTimeout: 8, resourceTimeout: 10, allowLegacyPath: true)

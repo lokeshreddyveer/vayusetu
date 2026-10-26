@@ -416,9 +416,9 @@ import UIKit
     private static let images: [String: UIImage] = Dictionary(uniqueKeysWithValues: ProtectionSubsystem.allCases.map { subsystem in
         let content = PrivacyIcon(subsystem: subsystem).stroke(Color.white, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 24, height: 24)
         let renderer = ImageRenderer(content: content); renderer.scale = 3
-        return (subsystem.rawValue, (renderer.uiImage ?? UIImage(systemName: "network")!).withRenderingMode(.alwaysTemplate))
+        return (subsystem.rawValue, (renderer.uiImage ?? UIImage(systemName: "network") ?? UIImage()).withRenderingMode(.alwaysTemplate))
     })
-    static func image(_ subsystem: ProtectionSubsystem) -> UIImage { images[subsystem.rawValue]! }
+    static func image(_ subsystem: ProtectionSubsystem) -> UIImage { images[subsystem.rawValue] ?? UIImage() }
 }
 #endif
 

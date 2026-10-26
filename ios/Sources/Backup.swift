@@ -49,7 +49,8 @@ enum BackupCrypto {
         guard password.utf8.count >= 12, password.utf8.count <= 1024, salt.count == 32 else { throw AppIssue(message: "Use a password of 12–1024 UTF-8 bytes.") }
         let passwordBytes = Array(password.utf8); var derived = [UInt8](repeating: 0, count: 32)
         let status = passwordBytes.withUnsafeBytes { p in salt.withUnsafeBytes { s in
-            CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), p.baseAddress!.assumingMemoryBound(to: Int8.self), p.count, s.baseAddress!.assumingMemoryBound(to: UInt8.self), s.count, CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), rounds, &derived, derived.count)
+            guard let pb = p.baseAddress, let sb = s.baseAddress else { return Int32(kCCParamError) }
+            return CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), pb.assumingMemoryBound(to: Int8.self), p.count, sb.assumingMemoryBound(to: UInt8.self), s.count, CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), rounds, &derived, derived.count)
         } }
         guard status == kCCSuccess else { throw AppIssue(message: "Could not derive the backup encryption key.") }
         defer { _ = derived.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
@@ -59,8 +60,9 @@ enum BackupCrypto {
         try backup.validate()
         let plain = try JSONEncoder().encode(backup)
         guard plain.count <= 8_000_000 else { throw AppIssue(message: "Backup exceeds the 8 MB limit.") }
-        var salt = Data(count: 32)
-        let status = salt.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+        var saltBytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, saltBytes.count, &saltBytes)
+        let salt = Data(saltBytes)
         guard status == errSecSuccess else { throw AppIssue(message: "Could not generate backup encryption randomness.") }
         let sealed = try AES.GCM.seal(plain, using: key(password: password, salt: salt), authenticating: magic + salt)
         guard let combined = sealed.combined else { throw AppIssue(message: "Could not encrypt the backup.") }

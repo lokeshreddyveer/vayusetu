@@ -34,7 +34,7 @@ struct NetworkMap: View {
 
     private var filtered: [FlowRecord] {
         let cutoff = window.seconds.map { Date().addingTimeInterval(-$0) }
-        return flows.filter { (cutoff == nil || $0.time > cutoff!) && (!blockedOnly || $0.verdict == .block) }
+        return flows.filter { flow in (cutoff.map { flow.time > $0 } ?? true) && (!blockedOnly || flow.verdict == .block) }
     }
     private var refreshKey: String { "\(flows.last?.id ?? 0):\(flows.count):\(window.rawValue):\(blockedOnly)" }
     /// This Mac, placed at the centre of the country its region setting names. It is a guess, drawn so the lines have a start.

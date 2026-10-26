@@ -290,7 +290,7 @@ import AppKit
             switch next {
             case .connected:
                 stage = .tunnelEstablished; retryAttempt = 0; watchdog?.cancel(); trafficPoints = []; usageAlerted = false
-                if sessionID == nil { sessionID = UUID(); sessionStart = manager?.connection.connectedDate ?? Date(); sessionElapsedOffset = Int64(max(0, Date().timeIntervalSince(sessionStart!))); sessionStartedAt = .now }
+                if sessionID == nil { sessionID = UUID(); let began = manager?.connection.connectedDate ?? Date(); sessionStart = began; sessionElapsedOffset = Int64(max(0, Date().timeIntervalSince(began))); sessionStartedAt = .now }
                 startSampling()
                 if lookupsOn { Task { try? await Task.sleep(for: .seconds(2)); self.pushLookupSetting() } }
                 if domainCounting { Task { try? await Task.sleep(for: .seconds(2)); self.pushDomainSetting() } }

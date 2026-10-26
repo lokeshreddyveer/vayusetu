@@ -236,7 +236,7 @@ final class SpeedEngine: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
         var times: [Double] = []
         for i in 0..<9 {
             try Task.checkCancellation()
-            var request = URLRequest(url: URL(string: base + "__down?bytes=0")!); request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            var request = URLRequest(url: URL(string: "https://speed.cloudflare.com/__down?bytes=0")!); request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
             let t0 = Date()
             guard let (_, response) = try? await session.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
             if i > 0 { times.append(Date().timeIntervalSince(t0) * 1000) }       // the first request carries the TLS handshake
@@ -265,7 +265,7 @@ final class SpeedEngine: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
 
     private func runDownload(_ source: Source, rate: @escaping @Sendable (Double) -> Void, reasons: inout [String]) async throws -> Measurement? {
         let streams = source == .apple ? 8 : 3
-        let url = source == .apple ? URL(string: apple + "large")! : URL(string: base + "__down?bytes=25000000")!
+        let url = source == .apple ? URL(string: "https://mensura.cdn-apple.com/api/v1/gm/large")! : URL(string: "https://speed.cloudflare.com/__down?bytes=25000000")!
         let total = Self.warmup + Self.measured
         let run = makeStreams(streams)          // this run's workers: nothing from an earlier run can reach them
         let workers = run.map { stream in Task { [self] in
@@ -301,7 +301,7 @@ final class SpeedEngine: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
 
     private func runUpload(_ source: Source, rate: @escaping @Sendable (Double) -> Void, reasons: inout [String]) async throws -> Measurement? {
         let streams = 3
-        let url = source == .apple ? URL(string: apple + "slurp")! : URL(string: base + "__up")!
+        let url = source == .apple ? URL(string: "https://mensura.cdn-apple.com/api/v1/gm/slurp")! : URL(string: "https://speed.cloudflare.com/__up")!
         let body = Data(count: 25_000_000)                               // big bodies: few requests, so no request limit is reached
         let total = Self.warmup + Self.measured
         let run = makeStreams(streams)

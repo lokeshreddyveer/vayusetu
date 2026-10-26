@@ -14,6 +14,19 @@ set -u
 WITH_VPN=1; [ "${1:-}" = "--no-vpn" ] && WITH_VPN=0
 OUT="${TMPDIR:-/tmp}/vayusetu-security-$(date +%Y%m%d-%H%M%S).txt"; : > "$OUT"
 pass=0; fail=0; nv=0
+# What this run observed, kept beside the other evidence so the project's status is derived from runs, not written by hand. The build is the one in scripts/version.json.
+EVIDENCE="$(cd "$(dirname "$0")/.." && pwd)/test-evidence/security-run.json"
+record_run() {
+    mkdir -p "$(dirname "$EVIDENCE")"
+    python3 - "$EVIDENCE" "$pass" "$fail" "$nv" "$WITH_VPN" "$(cd "$(dirname "$0")/.." && pwd)/scripts/version.json" <<'EOF'
+import json, sys
+from datetime import datetime, timezone
+path, passed, failed, unverified, with_vpn, version = sys.argv[1:7]
+json.dump({"recorded": datetime.now(timezone.utc).isoformat(timespec="seconds"), "build": json.load(open(version))["build"],
+           "passed": int(passed), "failed": int(failed), "notVerified": int(unverified), "withVPN": with_vpn == "1"}, open(path, "w"), indent=2); open(path, "a").write("\n")
+EOF
+}
+trap record_run EXIT
 say() { printf '%s\n' "$*" | tee -a "$OUT"; }
 P()  { pass=$((pass+1)); say "PASS         $1"; }
 F()  { fail=$((fail+1)); say "FAIL         $1"; }

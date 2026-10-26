@@ -28,7 +28,7 @@ public struct ResolverHealth: Codable, Equatable, Sendable {
         let total = rttBuckets.reduce(0, +)
         guard total >= Self.minimumSamples else { return nil }
         var seen = 0
-        for (i, c) in rttBuckets.enumerated() { seen += c; if Double(seen) >= p * Double(total) { return i < Self.bucketLimits.count ? Self.bucketLimits[i] : Self.bucketLimits.last! * 2 } }
+        for (i, c) in rttBuckets.enumerated() { seen += c; if Double(seen) >= p * Double(total) { return i < Self.bucketLimits.count ? Self.bucketLimits[i] : (Self.bucketLimits.last ?? 0) * 2 } }
         return nil
     }
     /// Counters from an older tunnel run are discarded: a new generation replaces, it is never added to.

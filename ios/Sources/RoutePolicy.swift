@@ -90,7 +90,8 @@ enum ResolverBootstrap {
         while state.value == nil {
             if !state.condition.wait(until: deadline), state.value == nil { throw AppIssue(message: "Resolver bootstrap timed out. Use your provider’s bootstrap addresses or retry.") }
         }
-        return try state.value!.get()
+        guard let result = state.value else { throw AppIssue(message: "Resolver bootstrap finished without a result.") }
+        return try result.get()
     }
     private final class BootstrapResult {
         let condition = NSCondition()
