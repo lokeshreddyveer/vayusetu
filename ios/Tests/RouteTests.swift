@@ -162,24 +162,24 @@ import NetworkExtension
             let hung: ResolverBootstrap.Starter = { _, _ in { stopped.bump() } }       // never answers
             let began = Date()
             do { _ = try ResolverBootstrap.resolve(host: "hung.test", timeout: 0.2, start: hung, pool: pool); fatalError("Hung lookup returned") }
-            catch { checks += 1; require((error as? AppIssue)?.message.contains("timed out") == true, "hung lookup reports a timeout") }
+            catch { checks += 1; require(ResolverBootstrap.describe(error).contains("no answer"), "hung lookup reports a timeout") }
             require(Date().timeIntervalSince(began) < 0.6, "hung lookup is bounded by its deadline")
             require(stopped.value == 1 && pool.inFlight == 0, "deadline stops the query once and gives the slot back")
             // cancellation from outside ends the wait at once
             let flag = Counter(); let cancelBegan = Date()
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { flag.bump() }
             do { _ = try ResolverBootstrap.resolve(host: "cancel.test", timeout: 5, start: hung, pool: pool, cancelled: { flag.value > 0 }); fatalError("Cancelled lookup returned") }
-            catch { checks += 1; require((error as? AppIssue)?.message.contains("cancelled") == true, "cancelled lookup says so") }
+            catch { checks += 1; require(ResolverBootstrap.describe(error).contains("cancelled"), "cancelled lookup says so") }
             require(Date().timeIntervalSince(cancelBegan) < 1, "cancellation does not wait for the deadline")
             require(stopped.value == 2 && pool.inFlight == 0, "cancellation stops the query and gives the slot back")
             // many abandoned attempts in a row never exhaust a one-slot pool
             var busy = 0
-            for _ in 0..<12 { do { _ = try ResolverBootstrap.resolve(host: "again.test", timeout: 0.03, start: hung, pool: pool) } catch { if (error as? AppIssue)?.message.contains("busy") == true { busy += 1 } } }
+            for _ in 0..<12 { do { _ = try ResolverBootstrap.resolve(host: "again.test", timeout: 0.03, start: hung, pool: pool) } catch { if ResolverBootstrap.describe(error).contains("pool") { busy += 1 } } }
             require(busy == 0 && pool.inFlight == 0 && stopped.value == 14, "twelve timed-out attempts never leave the pool busy")
             // busy means an attempt really is in flight, and clears when it ends
             let held = pool.take()
             do { _ = try ResolverBootstrap.resolve(host: "busy.test", timeout: 0.1, start: hung, pool: pool); fatalError("Ran with no free slot") }
-            catch { checks += 1; require((error as? AppIssue)?.message.contains("busy") == true, "a full pool says busy") }
+            catch { checks += 1; require(ResolverBootstrap.describe(error).contains("pool"), "a full pool says so") }
             held?.release(); held?.release()
             require(pool.inFlight == 0, "releasing a slot twice gives back one slot")
             let answered = try ResolverBootstrap.resolve(host: "ok.test", timeout: 1, start: { _, done in done(.success(["1.1.1.1"])); return {} }, pool: pool)
@@ -207,6 +207,85 @@ import NetworkExtension
             do { _ = try ResolverBootstrap.resolveResilient(host: "profile.test", cache: empty, start: { _, done in done(.failure(AppIssue(message: "down"))); return {} }, pool: pool, pathSatisfied: { true }, pause: { _ in }); fatalError("Fell back to another host's addresses") }
             catch { checks += 1; let text = (error as? AppIssue)?.message ?? ""; require(text.contains("no recent addresses are saved") && !text.contains("8.8.8.8") && !text.contains("1.1.1.1"), "failure names no resolver it did not use") }
             require(pool.inFlight == 0, "the slot count ends where it started")
+            // contention: four attempts hold every slot, a fifth waits for capacity and gets it when one finishes
+            do {
+                final class Hold: @unchecked Sendable { let lock = NSLock(); var done: [(Result<[String], Error>) -> Void] = []; func add(_ f: @escaping (Result<[String], Error>) -> Void) { lock.lock(); done.append(f); lock.unlock() }; var count: Int { lock.lock(); defer { lock.unlock() }; return done.count } }
+                final class Box: @unchecked Sendable { let lock = NSLock(); var results: [String: Result<[String], Error>] = [:]; func set(_ k: String, _ v: Result<[String], Error>) { lock.lock(); results[k] = v; lock.unlock() }; func get(_ k: String) -> Result<[String], Error>? { lock.lock(); defer { lock.unlock() }; return results[k] } }
+                let four = ResolverBootstrap.Pool(limit: 4), hold = Hold(), box = Box()
+                for i in 0..<4 {
+                    DispatchQueue.global().async { box.set("held\(i)", Result { try ResolverBootstrap.resolve(host: "held.test", timeout: 5, start: { _, done in hold.add(done); return {} }, pool: four) }) }
+                }
+                while hold.count < 4 { Thread.sleep(forTimeInterval: 0.01) }
+                require(four.inFlight == 4, "four attempts occupy every slot")
+                DispatchQueue.global().async { box.set("fifth", Result { try ResolverBootstrap.resolve(host: "fifth.test", timeout: 5, start: { _, done in done(.success(["2.2.2.2"])); return {} }, pool: four) }) }
+                Thread.sleep(forTimeInterval: 0.3)
+                require(box.get("fifth") == nil, "the fifth request waits for capacity instead of failing at once")
+                hold.done[0](.success(["3.3.3.3"]))
+                var waited = 0.0; while box.get("fifth") == nil && waited < 2 { Thread.sleep(forTimeInterval: 0.01); waited += 0.01 }
+                if case .success(let got)? = box.get("fifth") { require(got == ["2.2.2.2"], "the waiting request gets the freed slot and its own answer") } else { fatalError("FAIL: waiting request did not get the freed slot") }
+                for i in 1..<4 { hold.done[i](.success(["3.3.3.3"])) }
+                waited = 0; while four.inFlight > 0 && waited < 2 { Thread.sleep(forTimeInterval: 0.01); waited += 0.01 }
+                require(four.inFlight == 0, "every slot comes back once the attempts finish")
+            }
+            // saturation inside the retry loop: waiting for a slot costs time, not one of the tries
+            do {
+                let one = ResolverBootstrap.Pool(limit: 1), lease = one.take()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { lease?.release() }
+                let got = try ResolverBootstrap.resolveResilient(host: "cap.test", cache: ResolverBootstrap.Cache(), start: { _, done in done(.success(["4.4.4.4"])); return {} }, pool: one, pathSatisfied: { true }, pause: { _ in })
+                require(got.addresses == ["4.4.4.4"] && got.source == .live(attempt: 1), "a slot that frees up shortly is waited for and the first try still counts as the first")
+                let blocked = one.take()
+                var small = ResolverBootstrap.RetryPolicy(); small.totalBudget = 1.2
+                do { _ = try ResolverBootstrap.resolveResilient(host: "cap.test", policy: small, cache: ResolverBootstrap.Cache(), start: { _, done in done(.success(["4.4.4.4"])); return {} }, pool: one, pathSatisfied: { true }, pause: { _ in }); fatalError("Resolved with no free slot") }
+                catch { checks += 1; let text = (error as? AppIssue)?.message ?? ""; require(text.contains("after 0 tries") && text.contains("free lookup slot"), "a pool that never frees fails clearly and uses no tries: \(text)") }
+                blocked?.release()
+                require(one.inFlight == 0, "slots are free again afterwards")
+            }
+            // the query is fully stopped before its slot goes back
+            do {
+                let one = ResolverBootstrap.Pool(limit: 1)
+                final class Seen: @unchecked Sendable { let lock = NSLock(); var inFlightWhileStopping = -1; var closed = false }
+                let seen = Seen()
+                let slowStop: ResolverBootstrap.Starter = { _, _ in { seen.lock.lock(); seen.inFlightWhileStopping = one.inFlight; seen.lock.unlock(); Thread.sleep(forTimeInterval: 0.08); seen.lock.lock(); seen.closed = true; seen.lock.unlock() } }
+                do { _ = try ResolverBootstrap.resolve(host: "stop.test", timeout: 0.1, start: slowStop, pool: one); fatalError("Hung lookup returned") } catch { checks += 1 }
+                seen.lock.lock(); let closedBefore = seen.closed, during = seen.inFlightWhileStopping; seen.lock.unlock()
+                require(closedBefore && during == 1 && one.inFlight == 0, "the slot is still held while the query closes and is given back only after")
+                // the same on the answered path
+                final class Stops: @unchecked Sendable { let lock = NSLock(); var n = 0 }
+                let stops = Stops()
+                _ = try ResolverBootstrap.resolve(host: "ok.test", timeout: 1, start: { _, done in done(.success(["5.5.5.5"])); return { stops.lock.lock(); stops.n += 1; stops.lock.unlock() } }, pool: one)
+                require(stops.n == 1 && one.inFlight == 0, "an answered query is closed before its slot goes back")
+            }
+            // the network path answers "unknown": wait a short bounded time, then go on; "down" keeps waiting up to the limit
+            do {
+                var calls = 0; var pauses: [TimeInterval] = []; var tried = 0
+                let states: [ResolverBootstrap.PathState] = [.unknown, .unknown, .satisfied]
+                let ok = try ResolverBootstrap.resolveResilient(host: "path.test", cache: ResolverBootstrap.Cache(), start: { _, done in tried += 1; done(tried < 2 ? .failure(AppIssue(message: "down")) : .success(["6.6.6.6"])); return {} },
+                                                               pool: ResolverBootstrap.Pool(limit: 2), pathSatisfied: { defer { calls += 1 }; return states[min(calls, 2)] }, pause: { pauses.append($0) })
+                require(ok.addresses == ["6.6.6.6"] && pauses == [0.5, 0.25, 0.25], "unknown path is waited on in short steps until it answers: \(pauses)")
+                var unknownPauses: [TimeInterval] = []; var attempts = 0
+                _ = try? ResolverBootstrap.resolveResilient(host: "path2.test", cache: ResolverBootstrap.Cache(), start: { _, done in attempts += 1; done(attempts < 2 ? .failure(AppIssue(message: "down")) : .success(["6.6.6.6"])); return {} },
+                                                           pool: ResolverBootstrap.Pool(limit: 2), pathSatisfied: { .unknown }, pause: { unknownPauses.append($0) })
+                require(unknownPauses.dropFirst().reduce(0, +) <= 0.75, "a path that never answers delays the next try by at most half a second: \(unknownPauses)")
+            }
+            // one start-up budget for the first resolver and the optional backup
+            do {
+                require(ResolverBootstrap.RetryPolicy.within(remaining: 8, optional: false)?.totalBudget == 8, "the first resolver may use the whole budget")
+                require((ResolverBootstrap.RetryPolicy.within(remaining: 5, optional: true)?.totalBudget ?? 99) <= 2, "the backup gets a small share only")
+                require(ResolverBootstrap.RetryPolicy.within(remaining: 0.8, optional: true) == nil, "the backup is skipped when little time is left")
+                require(ResolverBootstrap.RetryPolicy.within(remaining: 0.3, optional: false) == nil, "nothing is attempted with no time left")
+                let primary = ResolverBootstrap.RetryPolicy.within(remaining: 8, optional: false)!, backup = ResolverBootstrap.RetryPolicy.within(remaining: 8 - primary.totalBudget + 2, optional: true)
+                require(backup == nil || primary.totalBudget + backup!.totalBudget <= 8 + 2, "primary plus backup stay within one budget")
+            }
+            // a stop request while waiting for capacity ends the wait
+            do {
+                let one = ResolverBootstrap.Pool(limit: 1), blocker = one.take(); let flag = Counter()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { flag.bump() }
+                let began = Date()
+                do { _ = try ResolverBootstrap.resolve(host: "wait.test", timeout: 5, start: hung, pool: one, cancelled: { flag.value > 0 }); fatalError("Ran with no free slot") }
+                catch { checks += 1; require(ResolverBootstrap.describe(error).contains("cancelled"), "cancelling while waiting for a slot says cancelled") }
+                require(Date().timeIntervalSince(began) < 1, "the wait for capacity ends when the start is stopped")
+                blocker?.release()
+            }
             // the real system query: stopping it right away leaves nothing running and no slot taken
             let before = Date()
             do { _ = try ResolverBootstrap.resolve(host: "bootstrap-test.invalid", timeout: 1, pool: pool); fatalError("Invalid name resolved") } catch { checks += 1 }

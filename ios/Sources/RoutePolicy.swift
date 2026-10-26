@@ -83,17 +83,31 @@ enum ResolverBootstrap {
     /// deadline, a cancellation), so an attempt that was given up on can never keep a slot from the next one.
     final class Pool: @unchecked Sendable {
         static let shared = Pool(limit: 4)
-        private let lock = NSLock(); private let limit: Int; private var used = 0
+        private let condition = NSCondition(); private let limit: Int; private var used = 0
         init(limit: Int) { self.limit = limit }
-        var inFlight: Int { lock.lock(); defer { lock.unlock() }; return used }
+        var inFlight: Int { condition.lock(); defer { condition.unlock() }; return used }
         final class Lease: @unchecked Sendable {
             private let pool: Pool; private let lock = NSLock(); private var released = false
             fileprivate init(_ pool: Pool) { self.pool = pool }
             func release() { lock.lock(); let first = !released; released = true; lock.unlock(); if first { pool.give() } }
             deinit { release() }
         }
-        func take() -> Lease? { lock.lock(); defer { lock.unlock() }; guard used < limit else { return nil }; used += 1; return Lease(self) }
-        fileprivate func give() { lock.lock(); used = max(0, used - 1); lock.unlock() }
+        /// A slot if one is free now.
+        func take() -> Lease? { condition.lock(); defer { condition.unlock() }; guard used < limit else { return nil }; used += 1; return Lease(self) }
+        /// A slot, waiting up to `wait` seconds for one to come back. Capacity that is merely busy is waited for, not treated as a failure; the wait ends
+        /// early when `cancelled` turns true.
+        func take(wait: TimeInterval, cancelled: () -> Bool = { false }) -> Lease? {
+            let deadline = Date().addingTimeInterval(wait)
+            condition.lock(); defer { condition.unlock() }
+            while used >= limit {
+                if cancelled() { return nil }
+                let step = min(0.05, deadline.timeIntervalSinceNow)
+                if step <= 0 { return nil }
+                _ = condition.wait(until: Date().addingTimeInterval(step))
+            }
+            used += 1; return Lease(self)
+        }
+        fileprivate func give() { condition.lock(); used = max(0, used - 1); condition.signal(); condition.unlock() }
     }
 
     /// What one attempt ended with, kept apart from every other attempt: an answer that arrives after its attempt was given up on lands here and nowhere else.
@@ -112,31 +126,46 @@ enum ResolverBootstrap {
             abandoned = true; return nil
         }
     }
-    enum Failure: Error, Equatable { case lookup(String) }
-    static func describe(_ error: Error) -> String { if case Failure.lookup(let why) = error { return why }; return "lookup failed" }
+    /// Why a lookup did not produce an address. Kept apart so that waiting for capacity, a silent resolver, a cancelled start and an answer with nothing
+    /// usable are each handled for what they are, and none of them is a connection.
+    enum Failure: Error, Equatable {
+        case capacity                     // every slot is in use and none came back in time
+        case timedOut                     // the resolver did not answer before the deadline
+        case cancelled                    // the start was stopped
+        case noUsableAddress(String)      // it answered, but with nothing that may be used
+        case lookup(String)               // the system could not be asked, or reported an error
+        var message: String {
+            switch self {
+            case .capacity: return "the lookup pool stayed full"
+            case .timedOut: return "no answer from the resolver in time"
+            case .cancelled: return "the start was cancelled"
+            case .noUsableAddress(let why): return why
+            case .lookup(let why): return why
+            }
+        }
+    }
+    static func describe(_ error: Error) -> String { (error as? Failure)?.message ?? (error as? AppIssue)?.message ?? "lookup failed" }
 
-    /// One bounded, cancellable lookup. The deadline stops the query itself, not just the wait for it, and the slot is given back on every exit.
+    /// One bounded, cancellable lookup. The deadline stops the query itself, not just the wait for it. The slot is given back only after the query has
+    /// fully stopped, and on every way out.
     static func resolve(host: String, timeout: TimeInterval = 5, start: Starter = systemStart, pool: Pool = .shared, cancelled: () -> Bool = { false }) throws -> [String] {
         guard timeout > 0, timeout <= 10, !host.isEmpty, host.utf8.count <= 253 else { throw AppIssue(message: "Invalid resolver bootstrap request.") }
         if ProfileParser.ipFamily(host) != nil { return try validated([host]) }
-        guard let lease = pool.take() else { throw AppIssue(message: "Resolver bootstrap is busy. Retry shortly.") }
+        guard let lease = pool.take(wait: min(timeout, 1.5), cancelled: cancelled) else { throw cancelled() ? Failure.cancelled : Failure.capacity }
         defer { lease.release() }
         let attempt = Attempt()
         let stop = start(host) { attempt.finish($0) }
         let deadline = Date().addingTimeInterval(timeout)
-        var outcome: Result<[String], Error>?
-        while true {
-            if cancelled() { break }
+        while !cancelled() {
             let remaining = deadline.timeIntervalSinceNow
             if remaining <= 0 { break }
             if attempt.signal.wait(timeout: .now() + min(0.05, remaining)) == .success { break }
         }
-        outcome = attempt.settle()
-        guard let outcome else {
-            stop()
-            throw AppIssue(message: cancelled() ? "Resolver bootstrap was cancelled." : "Resolver bootstrap timed out. Use your provider\u{2019}s bootstrap addresses or retry.")
-        }
-        return try validated(outcome.get())
+        let outcome = attempt.settle()
+        stop()                                                      // returns once the query is closed; only then does the slot go back
+        guard let outcome else { throw cancelled() ? Failure.cancelled : Failure.timedOut }
+        let found = try outcome.get()
+        do { return try validated(found) } catch { throw Failure.noUsableAddress((error as? AppIssue)?.message ?? "nothing usable in the answer") }
     }
     /// For callers that only have a blocking lookup (tests, tools). It cannot be stopped; the deadline and the slot still hold.
     static func resolve(host: String, timeout: TimeInterval = 5, lookup: @escaping (String) throws -> [String]) throws -> [String] {
@@ -157,19 +186,19 @@ enum ResolverBootstrap {
             var retained: Unmanaged<Query>?                       // the reference the system callback context holds; dropped once, after the query is closed
             let completion: (Result<[String], Error>) -> Void
             init(_ completion: @escaping (Result<[String], Error>) -> Void) { self.completion = completion }
-            func close() { // on the query's own queue, after which no callback can follow
-                queue.async { [self] in
-                    lock.lock(); let r = ref; ref = nil; let held = retained; retained = nil; lock.unlock()
-                    if let r { DNSServiceRefDeallocate(r) }            // after this no callback can follow
-                    held?.release()
-                }
+            private func closeNow() { // on the query's own queue; after the deallocation no callback can follow
+                lock.lock(); let r = ref; ref = nil; let held = retained; retained = nil; lock.unlock()
+                if let r { DNSServiceRefDeallocate(r) }
+                held?.release()
             }
+            func close() { queue.async { [self] in closeNow() } }
             func deliver() {
                 lock.lock(); if done { lock.unlock(); return }; done = true
                 let found = Array(addresses.sorted().prefix(8)); lock.unlock()
-                close(); completion(found.isEmpty ? .failure(Failure.lookup("no usable address")) : .success(found))
+                close(); completion(found.isEmpty ? .failure(Failure.noUsableAddress("the resolver answered with no usable address")) : .success(found))
             }
-            func stop() { lock.lock(); done = true; lock.unlock(); close() }
+            /// Returns only when the query has been closed, so a caller that then gives back its slot never frees capacity that is still in use.
+            func stop() { lock.lock(); done = true; lock.unlock(); queue.sync { closeNow() } }
         }
         let query = Query(completion)
         let context = Unmanaged.passRetained(query)
@@ -210,6 +239,15 @@ enum ResolverBootstrap {
         var totalBudget: TimeInterval = 8
         var maximumCacheAge: TimeInterval = 6 * 3600
         var attempts: Int { delays.count + 1 }
+        /// The policy for what is left of one shared start-up budget. The first resolver may use all of it; an optional one (the backup) only a small
+        /// share, and none when too little remains, so the backup can never push the start past the connection deadline. Nil: no time left.
+        static func within(remaining: TimeInterval, optional: Bool) -> RetryPolicy? {
+            let usable = optional ? min(remaining, 2) : remaining
+            guard usable >= (optional ? 1 : 0.5) else { return nil }
+            var policy = RetryPolicy(); policy.totalBudget = usable
+            if optional { policy.delays = [0.5] }
+            return policy
+        }
     }
     enum Source: Equatable { case live(attempt: Int), cached(age: TimeInterval) }
     /// Addresses a host resolved to earlier in this process. Only used after live lookups failed, only while recent, and always re-validated.
@@ -227,53 +265,67 @@ enum ResolverBootstrap {
     }
     static let sharedCache = Cache()
 
-    /// Whether the system currently reports a usable network path. A short-lived monitor; when it does not answer in time the answer is "yes", because
-    /// the lookup itself is the real test and a missing answer must not block a start.
-    static func networkPathSatisfied() -> Bool {
-        final class Box: @unchecked Sendable { let lock = NSLock(); var value = true }
+    enum PathState: Equatable, ExpressibleByBooleanLiteral {
+        case satisfied, unsatisfied, unknown
+        init(booleanLiteral value: Bool) { self = value ? .satisfied : .unsatisfied }
+    }
+    /// What the system says about the network path right now. "Unknown" means it did not answer in time; it is not the same as "usable", and the
+    /// caller waits a short, bounded moment for a real answer before going on.
+    static func networkPathState() -> PathState {
+        final class Box: @unchecked Sendable { let lock = NSLock(); var value: PathState = .unknown }
         let box = Box(), monitor = NWPathMonitor(), answered = DispatchSemaphore(value: 0)
-        monitor.pathUpdateHandler = { path in box.lock.lock(); box.value = path.status == .satisfied; box.lock.unlock(); answered.signal() }
+        monitor.pathUpdateHandler = { path in box.lock.lock(); box.value = path.status == .satisfied ? .satisfied : .unsatisfied; box.lock.unlock(); answered.signal() }
         monitor.start(queue: DispatchQueue.global(qos: .utility))
-        let got = answered.wait(timeout: .now() + 0.5) == .success
+        _ = answered.wait(timeout: .now() + 0.5)
         monitor.cancel()
         box.lock.lock(); defer { box.lock.unlock() }
-        return got ? box.value : true
+        return box.value
     }
 
     static func resolveResilient(host: String, policy: RetryPolicy = RetryPolicy(), cache: Cache = sharedCache, now: () -> Date = Date.init,
-                                 lookup: @escaping (String) throws -> [String], pathSatisfied: () -> Bool = networkPathSatisfied,
+                                 lookup: @escaping (String) throws -> [String], pathSatisfied: () -> PathState = networkPathState,
                                  pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
         try resolveResilient(host: host, policy: policy, cache: cache, now: now, start: blocking(lookup), pathSatisfied: pathSatisfied, pause: pause)
     }
     static func resolveResilient(host: String, policy: RetryPolicy = RetryPolicy(), cache: Cache = sharedCache, now: () -> Date = Date.init,
-                                 start: Starter = systemStart, pool: Pool = .shared, cancelled: () -> Bool = { false }, pathSatisfied: () -> Bool = networkPathSatisfied,
+                                 start: Starter = systemStart, pool: Pool = .shared, cancelled: () -> Bool = { false }, pathSatisfied: () -> PathState = networkPathState,
                                  pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> (addresses: [String], source: Source) {
         if ProfileParser.ipFamily(host) != nil { return (try validated([host]), .live(attempt: 1)) }
-        var lastIssue = "no answer"; var pathWasDown = false; var spent: TimeInterval = 0; var tries = 0
-        for attempt in 1...policy.attempts {
-            if attempt > 1 {
-                let wait = min(policy.delays[attempt - 2], max(0, policy.totalBudget - spent))
+        var lastIssue = "no answer"; var pathWasDown = false; var spent: TimeInterval = 0; var tries = 0; var capacityWaits = 0
+        while tries < policy.attempts {
+            if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
+            if tries > 0 {
+                let wait = min(policy.delays[tries - 1], max(0, policy.totalBudget - spent))
                 pause(wait); spent += wait
-                // Give the path one more short chance to come back before spending a lookup on it.
+                // Give the path a short, bounded chance to settle before spending a lookup on it. "Unknown" waits too, but only half a second.
                 var waited = 0.0
-                while !pathSatisfied() && waited < policy.attemptTimeout && spent + 0.25 < policy.totalBudget { pathWasDown = true; pause(0.25); waited += 0.25; spent += 0.25 }
+                while waited < policy.attemptTimeout && spent + 0.25 < policy.totalBudget {
+                    let state = pathSatisfied()
+                    if state == .satisfied { break }
+                    if state == .unsatisfied { pathWasDown = true } else if waited >= 0.5 { break }
+                    pause(0.25); waited += 0.25; spent += 0.25
+                }
             }
             let remaining = policy.totalBudget - spent
-            if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
             if remaining < 0.5 { break }                                    // not enough budget left for a lookup worth making
-            tries += 1
             let began = Date()
             do {
                 let found = try resolve(host: host, timeout: min(policy.attemptTimeout, remaining), start: start, pool: pool, cancelled: cancelled)
                 cache.store(host, found, at: now())
-                return (found, .live(attempt: attempt))
+                return (found, .live(attempt: tries + 1))
+            } catch Failure.cancelled {
+                throw AppIssue(message: "Resolver bootstrap was cancelled.")
+            } catch Failure.capacity {
+                // Waiting for a slot is not a failed lookup: it uses up time from the budget, not one of the tries.
+                capacityWaits += 1; lastIssue = Failure.capacity.message; spent += Date().timeIntervalSince(began)
+                if capacityWaits >= 6 { break }
             } catch {
                 if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
-                lastIssue = (error as? AppIssue)?.message ?? Self.describe(error); spent += Date().timeIntervalSince(began)
+                tries += 1; lastIssue = Self.describe(error); spent += Date().timeIntervalSince(began)
             }
         }
         if let kept = cache.recent(host, now: now(), maximumAge: policy.maximumCacheAge) { return (kept.addresses, .cached(age: kept.age)) }
-        throw AppIssue(message: "Resolver bootstrap failed after \(tries) \(tries == 1 ? "try" : "tries")" + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
+        throw AppIssue(message: "Resolver bootstrap failed after \(tries) \(tries == 1 ? "try" : "tries")" + (capacityWaits > 0 ? " and \(capacityWaits) wait\(capacityWaits == 1 ? "" : "s") for a free lookup slot" : "") + (pathWasDown ? " while the network was unavailable" : "") + " (\(lastIssue)) and no recent addresses are saved. Add the provider’s bootstrap addresses, or retry when the network is steady.")
     }
 }
 

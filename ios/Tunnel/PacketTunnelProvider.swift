@@ -64,7 +64,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     let validated = try DNSService.endpoint(secret.resolver)
                     guard let host = validated.host else { throw AppIssue(message: "Resolver hostname is missing.") }
                     resolver = validated
-                    phase = .resolverBootstrap; TunnelStartupEvent.record(phase)
+                    phase = .resolverBootstrap; TunnelStartupEvent.record(phase); self.startBootstrapBudget()
                     if let supplied = secret.resolverBootstrapAddresses, !supplied.isEmpty { addresses = try ResolverBootstrap.validated(supplied) }
                     else { addresses = try self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), token: token) }
                 }
@@ -74,7 +74,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     guard let rulesPath = DNSRuleStore.url?.path else { throw AppIssue(message: "App Group access is unavailable.") }
                     var settings: [String: Any] = ["rulesPath": rulesPath, "resolver": resolver.absoluteString, "bootstrap": addresses,
                                                    "viaVPN": secret.dnsUpstreamDirect != true, "server": DNSTunnelAddress.server, "filtering": true, "rebinding": secret.rebindingProtection != false]
-                    if let backup = self.fallback(secret) { settings["fallback"] = backup.url.absoluteString; settings["fallbackBootstrap"] = backup.addresses }
+                    if let backup = self.fallback(secret, token: token) { settings["fallback"] = backup.url.absoluteString; settings["fallbackBootstrap"] = backup.addresses }
                     let json = String(decoding: try JSONSerialization.data(withJSONObject: settings), as: UTF8.self)
                     guard wgDNSConfigure(json) == 0 else { throw AppIssue(message: "DNS filter configuration was rejected.") }
                 } else { _ = wgDNSConfigure(nil) }
@@ -89,15 +89,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     else { self.lifecycle.withCurrent(token) { TunnelStartupEvent.record(.established) }; self.lifecycle.finish(token, error: nil) }
                 }
                 }
-            } catch { TunnelStartupEvent.record(phase, error: error); self.lifecycle.finish(token, error: AppIssue(message: "Tunnel setup failed. Check your profile, resolver, Keychain sharing, and Network Extension provisioning.")) }
+            } catch { TunnelStartupEvent.record(phase, error: error); self.lifecycle.finish(token, error: AppIssue(message: Self.startFailure(phase: phase, error: error))) }
         }
     }
 
     /// Resolves the resolver’s name with retries and path checks. Addresses from an earlier lookup in this process are used only after live lookups
     /// failed, and that is written to the log so a start that relied on them can be told apart from one that did not.
-    private func bootstrap(host: String, token: UUID?) throws -> [String] {
+    /// What the system is told when the start fails: VayuSetu's own plain-language reason and the stage it failed at. Those messages carry no keys,
+    /// addresses or resolver names (the same text goes to the startup log); anything else keeps the generic wording.
+    static func startFailure(phase: TunnelStartupEvent.Stage, error: Error) -> String {
+        let generic = "Tunnel setup failed. Check your profile, resolver, Keychain sharing, and Network Extension provisioning."
+        guard let issue = error as? AppIssue, !issue.message.isEmpty else { return generic }
+        return "Tunnel setup failed at \(phase.rawValue): \(issue.message)"
+    }
+    /// One time limit covers the first resolver and the optional backup together, so the backup can never push the start past the connection deadline.
+    private var bootstrapDeadline = Date()
+    private func startBootstrapBudget() { bootstrapDeadline = Date().addingTimeInterval(ResolverBootstrap.RetryPolicy().totalBudget) }
+    private func bootstrap(host: String, token: UUID?, optional: Bool = false) throws -> [String] {
+        guard let policy = ResolverBootstrap.RetryPolicy.within(remaining: bootstrapDeadline.timeIntervalSinceNow, optional: optional) else {
+            throw AppIssue(message: optional ? "No time left to look up the backup resolver." : "No time left to look up the resolver.")
+        }
         // A stop request during start-up ends the lookup at once: the query is stopped and its slot given back.
-        let result = try ResolverBootstrap.resolveResilient(host: host, cancelled: { [weak self] in token.map { self?.lifecycle.currentToken != $0 } ?? false })
+        let result = try ResolverBootstrap.resolveResilient(host: host, policy: policy, cancelled: { [weak self] in token.map { self?.lifecycle.currentToken != $0 } ?? false })
         let log = Logger(subsystem: "app.vayusetu.tunnel", category: "startup")
         switch result.source {
         case .live(let attempt) where attempt > 1: log.notice("startup resolverBootstrap succeeded on try \(attempt, privacy: .public)")
@@ -108,11 +121,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// The optional backup resolver and its bootstrap addresses. A problem with the backup is never allowed to stop the tunnel.
-    private func fallback(_ secret: TunnelSecret) -> (url: URL, addresses: [String])? {
+    private func fallback(_ secret: TunnelSecret, token: UUID?) -> (url: URL, addresses: [String])? {
         guard let text = secret.fallbackResolver, let url = try? DNSService.endpoint(text), let host = url.host else { return nil }
         let addresses: [String]?
         if let supplied = secret.fallbackBootstrapAddresses, !supplied.isEmpty { addresses = try? ResolverBootstrap.validated(supplied) }
-        else { addresses = try? self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), token: nil) }
+        else { addresses = try? self.bootstrap(host: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), token: token, optional: true) }
         guard let addresses, !addresses.isEmpty else { return nil }
         return (url, addresses)
     }
@@ -122,7 +135,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         phase = .validatingResolver; TunnelStartupEvent.record(phase)
         let resolver = try DNSService.endpoint(secret.resolver)
         guard let host = resolver.host else { throw AppIssue(message: "Resolver hostname is missing.") }
-        phase = .resolverBootstrap; TunnelStartupEvent.record(phase)
+        phase = .resolverBootstrap; TunnelStartupEvent.record(phase); startBootstrapBudget()
         // Resolved before the tunnel exists; afterwards the system resolver is this tunnel itself.
         let addresses: [String]
         if let supplied = secret.resolverBootstrapAddresses, !supplied.isEmpty { addresses = try ResolverBootstrap.validated(supplied) }
@@ -130,7 +143,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // Validated by the same rules as before, then handed to the shared Go client (HTTP/2, DoT, bootstrap dialing).
         _ = try DNSUpstreamConfiguration(endpoint: resolver, addresses: addresses)
         var upstream: any DNSUpstreaming = try GoDNSUpstream(resolver: resolver, bootstrap: addresses)
-        if let backup = fallback(secret), let second = try? GoDNSUpstream(resolver: backup.url, bootstrap: backup.addresses) { upstream = FallbackUpstream(primary: upstream, backup: second) }
+        if let backup = fallback(secret, token: token), let second = try? GoDNSUpstream(resolver: backup.url, bootstrap: backup.addresses) { upstream = FallbackUpstream(primary: upstream, backup: second) }
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: DNSTunnelAddress.interface)
         let ipv4 = NEIPv4Settings(addresses: [DNSTunnelAddress.interface], subnetMasks: ["255.255.255.255"])
         ipv4.includedRoutes = [NEIPv4Route(destinationAddress: DNSTunnelAddress.server, subnetMask: "255.255.255.255")]
