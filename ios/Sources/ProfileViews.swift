@@ -182,37 +182,6 @@ struct VSProfilesScreen: View {
             return lhs == rhs ? a.id.uuidString < b.id.uuidString : lhs > rhs
         }
     }
-    private func nativeProfileRow(_ summary: ManualVPNDraftSummary) -> some View {
-        let current = tunnel.configuredProfile == summary.id && tunnel.running
-        return HStack(spacing: 4) {
-            Button {
-                guard summary.protocolKind == .ikev2, !current else { return }
-                if tunnel.running { switchingNative = summary }
-                else { store.selectAndConnectManual(summary) }
-            } label: {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "network").font(.system(size: 22)).foregroundStyle(.secondary).frame(width: 24)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(summary.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        Text(summary.protocolKind.rawValue + (summary.protocolKind == .ikev2 ? " · Server-managed DNS" : " · Unavailable")).font(.caption).foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            if current && tunnel.status == .connected { Circle().fill(.green).frame(width: 5, height: 5) }
-                            Text(current ? tunnel.statusText : "Tap to connect").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 4)
-                }.frame(maxWidth: .infinity, minHeight: 64, alignment: .center).contentShape(Rectangle())
-
-            }.buttonStyle(VSPlainButtonStyle()).accessibilityIdentifier("NativeProfileRow")
-                .disabled(summary.protocolKind == .openVPN || tunnel.busy || store.connectionOperation)
-            Menu {
-                Button("Edit Configuration", systemImage: "pencil") { do { manualDraft = try store.manualDraft(summary) } catch { store.notice = "Could not read the profile from Keychain." } }.disabled(tunnel.running || tunnel.busy || store.connectionOperation)
-                Button("Export / Back Up Profile", systemImage: "square.and.arrow.up") { do { nativeExport = try store.manualDraft(summary) } catch { store.notice = "Could not read the profile from Keychain." } }
-                Button("Delete Profile", systemImage: "trash", role: .destructive) { deletingNative = summary }.disabled(tunnel.running || tunnel.busy || store.connectionOperation)
-            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }
-                .accessibilityLabel("IKEv2 profile actions").disabled(summary.protocolKind == .openVPN)
-        }.padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 2)
-    }
     private var activeConnectionCard: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let snapshot = store.protection(.vpn, now: context.date)
@@ -289,32 +258,6 @@ struct VSProfilesScreen: View {
         if store.selected == profile.id && store.selectedManualProfile == nil { return "Selected" }
         if let date = store.lastUsed[profile.id.uuidString] { return "Last used " + date.formatted(.relative(presentation: .named)) }
         return "Never used"
-    }
-    private func profileRow(_ profile: SavedProfile) -> some View {
-        HStack(spacing: 4) {
-            Button {
-                guard !(tunnel.running && tunnel.configuredProfile == profile.id) else { return }
-                if tunnel.running { switching = profile }
-                else { store.selectAndConnectWireGuard(profile) }
-            } label: {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 22)).foregroundStyle(.secondary).frame(width: 24)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(profile.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        Text("WireGuard · " + (profile.endpoints.first ?? "No endpoint")).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        HStack(spacing: 6) {
-                            if tunnel.status == .connected && tunnel.configuredProfile == profile.id { Circle().fill(Color(red: 0.302, green: 0.871, blue: 0.663)).frame(width: 5, height: 5) }
-                            Text(rowStatus(profile)).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 4)
-                }.frame(maxWidth: .infinity, minHeight: 64, alignment: .center).contentShape(Rectangle())
-            }.buttonStyle(VSPlainButtonStyle()).accessibilityIdentifier("ProfileListRow").disabled(tunnel.busy || store.connectionOperation)
-                .contextMenu { profileMenu(profile) }
-            Menu { profileMenu(profile) } label: {
-                Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold)).foregroundStyle(.secondary).frame(width: 44, height: 44)
-            }.accessibilityLabel("Actions for " + profile.name)
-        }.padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 2)
     }
     @ViewBuilder private func profileMenu(_ profile: SavedProfile) -> some View {
         if tunnel.running && tunnel.configuredProfile == profile.id {

@@ -243,7 +243,6 @@ import SwiftUI
     }
     func removeList(_ id: UUID) { pushLists(lists.filter { $0.id != id }) }
     func setListEnabled(_ id: UUID, _ on: Bool) { pushLists(lists.map { var l = $0; if l.id == id { l.enabled = on }; return l }) }
-    func setListHours(_ id: UUID, _ hours: Int) { pushLists(lists.map { var l = $0; if l.id == id { l.refreshHours = hours }; return l }) }
     func refreshDueLists() async { for list in lists where list.due { await refreshList(list.id) } }
     /// Fetches a list's source. A failed fetch keeps the entries it had and says what went wrong.
     func refreshList(_ id: UUID) async {
@@ -956,44 +955,6 @@ struct MacNetwork: View {
             rule.schedule = NetSchedule(days: days.sorted(), start: minutes(startTime), end: minutes(endTime))
         }
         client.addRule(rule); newRule = NetRule(app: "*", host: "*", port: "*", action: .block); expiry = .never; scheduleOn = false
-    }
-}
-
-/// A global, non-modal prompt for a newly observed connection. It remains visible
-/// on every page, so the filter behaves like a host firewall rather than a page-local
-/// activity viewer. The full Network page still shows all pending questions.
-struct ConnectionQuestionBanner: View {
-    let question: PendingQuestion
-    @ObservedObject var client: FilterClient
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "questionmark.shield.fill").foregroundStyle(.orange)
-                Text("New connection") .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                Text("\(client.pending.count) waiting").font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            Text("\(question.appName) wants to connect")
-                .font(.system(size: 13, weight: .medium))
-            Text("\(question.host)\(question.port.isEmpty ? "" : ":" + question.port) · \(question.proto)")
-                .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
-            if question.identity != nil || question.parent != nil {
-                Text([question.identity, question.parent.map { "started by " + $0 }].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(question.identity == nil ? Color.secondary : Color.orange)
-            }
-            HStack(spacing: 8) {
-                Button("Allow once") { client.answer(question, allow: true, remember: false) }
-                Button("Always allow") { client.answer(question, allow: true, remember: true) }
-                Button("Block once") { client.answer(question, allow: false, remember: false) }
-                Button("Always block") { client.answer(question, allow: false, remember: true) }.buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.orange.opacity(0.35)))
-        .shadow(radius: 12, y: 5)
-        .accessibilityElement(children: .contain)
     }
 }
 

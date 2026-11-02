@@ -52,23 +52,6 @@ struct MenuBarArch: Shape {
     }
 }
 
-struct MenuBarIcon: View {
-    let state: MenuBarState
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            MenuBarArch()
-                .stroke(.primary.opacity(state == .off ? 0.62 : 1), style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                .frame(width: 18, height: 13)
-                .padding(.trailing, 2).padding(.bottom, 2)
-            if let colour = state.colour {
-                Circle().fill(colour).frame(width: 6, height: 6)
-                    .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.5))
-                    .offset(x: 1.5, y: 1.5)
-            }
-        }.frame(width: 21, height: 18)
-    }
-}
-
 /// The menu bar label: the mark, and a state that comes from the same evidence as the "Is it working?" panel.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppStore

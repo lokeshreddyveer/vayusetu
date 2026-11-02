@@ -113,26 +113,6 @@ struct VSHomeScreen: View {
             .background(VSDesign.surface, in: Capsule()).overlay(Capsule().strokeBorder(tint.opacity(0.22), lineWidth: 1))
             .accessibilityElement(children: .combine).accessibilityLabel("\(title) \(text)" + (total.map { ", \(bytes($0)) this session" } ?? ""))
     }
-    private func dnsCard(_ title: String, icon: String, value: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(value ?? "—").font(.system(size: trafficSize, weight: .semibold)).monospacedDigit()
-            Text(value == nil ? "Unavailable" : "since the tunnel started").font(.caption).foregroundStyle(.secondary)
-        }.padding(12).frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
-            .background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(VSDesign.separator, lineWidth: 1))
-    }
-    private func trafficCard(_ title: String, icon: String, rateValue: Double, total: UInt64?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(rate(rateValue)).font(.system(size: trafficSize, weight: .semibold)).monospacedDigit()
-                .fixedSize(horizontal: false, vertical: true)
-            Text(total.map { bytes($0) + " total" } ?? "Total unavailable").font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }.padding(12).frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
-            .background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(VSDesign.separator, lineWidth: 1))
-    }
     // Power button colour follows the observed network mode: gray off, teal DNS only, blue VPN only, green VPN + DNS.
     private var connectionAccent: Color {
         if !tunnel.ready { return .secondary }

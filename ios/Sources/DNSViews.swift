@@ -104,26 +104,6 @@ struct VSDNSScreen: View {
         if systemDNS.enabled == nil { return "Not observed" }
         return "System DNS"
     }
-    private var statusTitle: String {
-        switch dnsSnapshot.observed {
-        case .active: return "DNS ACTIVE"
-        case .inactive: return systemDNS.hasForeignConfiguration ? "OTHER DNS CONFIGURATION" : "SYSTEM DNS"
-        case .enabledNotVerified: return "NOT VERIFIED"
-        case .starting: return "CONFIGURING"
-        case .limited: return "LIMITED"
-        case .needsAttention: return "NEEDS ATTENTION"
-        case .error: return "DNS ERROR"
-        case .unknown: return "STATUS UNKNOWN"
-        }
-    }
-    private var statusColor: Color {
-        switch dnsSnapshot.observed {
-        case .active: return Color.green
-        case .starting, .enabledNotVerified, .limited, .needsAttention: return Color.orange
-        case .error: return Color.red
-        case .inactive, .unknown: return .secondary
-        }
-    }
     // Encrypted DNS runs in VayuSetu's own tunnel; no iOS DNS profile is ever installed or activated.
     private var activationRequired: Bool { false }
     private var preferredConfigured: Bool { tunnel.acceptedResolverMatches(store.endpoint) || !tunnel.running && systemDNS.enabled == true && systemDNS.configuredResolverMatches(store.endpoint) }
@@ -521,7 +501,6 @@ private enum DashboardMetrics {
     static let cardRadius: CGFloat = 12
     static let innerRadius: CGFloat = 10
     static let iconColumn: CGFloat = 28
-    static let tileGap: CGFloat = 10
 }
 
 extension VSDNSScreen {

@@ -136,13 +136,6 @@ struct VSChecksScreen: View {
             return item.name + " (" + reason.replacingOccurrences(of: "Probe failed · ", with: "") + ")"
         }.joined(separator: ", ")
     }
-    /// What the last public-IP probe actually saw, next to what the tunnel was configured to do.
-    var ipv6Summary: String {
-        let configured = tunnel.stats.map { $0.ipv6Blocked ? "blocking configured" : "tunnel configured" }
-        guard let probe = network.ipv6Probe else { return configured.map { $0.capitalized + " · run checks to observe" } ?? "Not verified" }
-        if let address = probe.address { return "IPv6 reachable as \(address)" }
-        return "No IPv6 address seen" + (configured.map { " · " + $0 } ?? "")
-    }
     // MARK: Public IP
     var publicIPSummary: String {
         if network.checkingIP { return "Measuring…" }

@@ -156,7 +156,6 @@ public struct IncidentEvidence: Equatable, Sendable {
     public var rssiBefore: Int?
     public var rssiDuring: Int?
     public var gatewayFailedDuring: Bool?
-    public var gatewayRecovered: Bool?
     public var internetFailedDuring: Bool?
     public var dnsFailedDuring: Bool?
     /// Seconds between the Mac waking and the incident starting, when it woke recently.

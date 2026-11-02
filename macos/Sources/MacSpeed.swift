@@ -193,7 +193,6 @@ struct SpeedTestResult: Codable, Equatable, Identifiable {
 final class SpeedEngine: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
     struct Failure: Error { let text: String }
     struct Measurement { let rate: Double; let streams: Int; let seconds: Double; let source: String }
-    static let downloadStreams = 6, uploadStreams = 4
     static let warmup = 2.0, measured = 7.0
     /// A test stops once it has moved this much, so a gigabit line does not spend a gigabyte on one test.
     static let downloadCap: Int64 = 600_000_000, uploadCap: Int64 = 300_000_000

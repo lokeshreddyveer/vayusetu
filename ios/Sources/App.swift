@@ -14,6 +14,14 @@ import BackgroundTasks
     }
 }
 struct RootView: View {
+    /// The UI tests start the app with this argument to skip onboarding and first-run list setup. Release builds ignore it.
+    private static var launchedForUITesting: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--ui-testing")
+        #else
+        false
+        #endif
+    }
     @ObservedObject var store: AppStore
     @ObservedObject var tunnel: TunnelController
     @StateObject private var network = NetworkDiagnostics()
@@ -59,7 +67,7 @@ struct RootView: View {
                     + (store.pendingDecision?.ackKey != nil ? [VSDialogAction(title: "Connect, Don’t Ask Again", kind: .plain, run: { store.confirmPendingDecision(remember: true) })] : [])
                     + [VSDialogAction(title: "Cancel", kind: .cancel)])
         .vsDialogHost()
-        .onAppear { if !onboarded && !ProcessInfo.processInfo.arguments.contains("--ui-testing") && store.profiles.isEmpty && store.dnsProfiles.isEmpty { onboarding = true } }
+        .onAppear { if !onboarded && !Self.launchedForUITesting && store.profiles.isEmpty && store.dnsProfiles.isEmpty { onboarding = true } }
         .onChange(of: scenePhase) { _, phase in if phase == .background { FilterBackgroundRefresh.schedule() } }
         .task(id: "\(scenePhase)-\(liveActivityEnabled)") {
             guard scenePhase == .active else { return }
@@ -164,13 +172,11 @@ struct RootView: View {
             #endif
         }
         .task {
-            if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
+            if Self.launchedForUITesting { return }
             await store.filtering.enableDefaultListsOnFirstRun()
         }
         .task {
-            #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return }
-            #endif
+            if Self.launchedForUITesting { return }
             guard TunnelController.available, store.connectOnLaunch else { return }
             for _ in 0..<100 { if tunnel.ready || Task.isCancelled { break }; try? await Task.sleep(for: .milliseconds(100)) }
             if !Task.isCancelled { store.connect() }

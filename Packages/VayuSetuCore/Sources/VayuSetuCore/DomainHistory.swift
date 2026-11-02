@@ -29,8 +29,6 @@ public struct DomainTotals: Equatable, Sendable {
 
 public enum DomainHistory {
     public enum Kind: Sendable { case blocked, allowed }
-    /// Days kept, by the user's choice.
-    public static let retentionChoices = [7, 30, 365]
     /// Domains kept for each day; the least active are dropped first. The others are not lost from the totals.
     public static let perDayLimit = 500
 

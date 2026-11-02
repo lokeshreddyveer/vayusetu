@@ -155,7 +155,6 @@ struct VSAdblockScreen: View {
         guard let oldest = enabled.min(by: { ($0.updated ?? .distantPast) < ($1.updated ?? .distantPast) }) else { return nil }
         return (oldest.updated.map { Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0 } ?? 999, oldest.name)
     }
-    @State private var testResult: String?
     @State private var testing = false
     private func tone(_ label: String) -> Color { label == "Active" ? .green : label == "Off" || label == "Not verified" ? .secondary : .orange }
     private var siteExceptionCount: Int { filtering.configuration.rules.filter { $0.source == FilteringController.siteExceptionSource }.count }
@@ -173,10 +172,6 @@ struct VSAdblockScreen: View {
     }
     private func detail(_ title: String, _ value: String) -> some View {
         HStack { Text(title).font(.subheadline); Spacer(minLength: 12); Text(value).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
-    }
-    private func categoryTile(_ icon: String, _ title: String, _ category: FilterCategory) -> some View {
-        let n = count(category)
-        return VSStatTile(icon: icon, title: title, value: n == 0 ? "Off" : "\(n) on", tint: n == 0 ? .secondary : .green)
     }
     var body: some View {
         let state = safariState

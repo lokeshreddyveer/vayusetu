@@ -339,14 +339,6 @@ import VayuSetuCore
             } catch { notice = error.localizedDescription }
         }
     }
-    func rename(_ profile: SavedProfile, to name: String) {
-        guard !tunnel.busy else { notice = "Wait for the current operation before renaming."; return }
-        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty, cleaned.count <= 80 else { notice = "Use a name between 1 and 80 characters."; return }
-        var items = profiles
-        if let index = items.firstIndex(where: { $0.id == profile.id }) { items[index].name = cleaned }
-        do { try save(items); profiles = items } catch { notice = "Could not save the profile name." }
-    }
     /// The DNS Mode screen's three exclusive choices map onto the independent controls; the coordinator does the work.
     func changeDNSMode(_ target: DNSManagementMode) async -> String {
         var next = selection
@@ -363,28 +355,6 @@ import VayuSetuCore
     }
     var observedVPNRuntime: ProtectionRuntime {
         tunnel.protocolName == "IKEv2" ? .ikev2 : .wireGuard
-    }
-    func validateSelectedDNSVPN() throws {
-        if let reason = selectedVPNRuntime.capabilities.rejection(remoteVPN: true) { throw AppIssue(message: reason) }
-        if let id = selectedManualProfile {
-            guard let summary = manualDrafts.first(where: { $0.id == id }), summary.protocolKind == .ikev2 else { throw AppIssue(message: "Select a supported VPN profile in Profiles first.") }
-            try manualDraft(summary).validate()
-            guard !requireNativeIPv6 else { throw AppIssue(message: "The selected IKEv2 adapter cannot enforce the requested dual-stack policy.") }
-        } else {
-            guard mode.supported else { throw AppIssue(message: RoutingMode.directDNSUnavailable) }
-            guard let profile = active, let data = try Vault.get(profile.id.uuidString) else { throw AppIssue(message: "Select a saved VPN profile with available credentials first.") }
-            let parsed: WireGuardSummary
-            do { parsed = try ProfileParser.parse(String(decoding: data, as: UTF8.self)) }
-            catch {
-                let text = String(decoding: data, as: UTF8.self)
-                filtering.record("Saved profile \(profile.name) did not parse: \(data.count) bytes, interface section \(text.contains("[Interface]")), key line \(text.contains("PrivateKey")), peers \(text.components(separatedBy: "[Peer]").count - 1)")
-                throw data.isEmpty ? AppIssue(message: "The saved keys for \(profile.name) are missing. Edit the profile and import its configuration file again.") : error
-            }
-            try ProfileParser.validateTunnel(parsed)
-            _ = try DNSService.endpoint(endpoint)
-            if !bootstrapAddresses.isEmpty { _ = try ResolverBootstrap.validated(bootstrapAddresses) }
-            if requireNativeIPv6 && (!parsed.fullTunnel || !parsed.addresses.contains(where: { ProfileParser.ipFamily(String($0.split(separator: "/")[0])) == 6 })) { throw AppIssue(message: "Select a full-tunnel dual-stack WireGuard profile for the requested IPv6 policy.") }
-        }
     }
 
     private var applyGeneration = 0

@@ -32,6 +32,8 @@ Logs to capture for each run: the app's connection events, the tunnel's log (sta
 
 ## Procedure
 
+The script `macos/tools/probe-vpn-dns.sh` runs steps 1 to 6 below and restores protection off at the end.
+
 Always start and end with protection off; restore with `both/off`, `vpn/off`, `dns/off` and verify. Stop at once on: a system-extension prompt, a Connected tunnel with no traffic for 30 s (restore first), the app quitting unexpectedly, or protection that cannot be restored.
 
 1. **Control A — VPN only**, 60 s of the full probe set at 1, 2, 4, 8, 16, 32, 60 s after Connected.

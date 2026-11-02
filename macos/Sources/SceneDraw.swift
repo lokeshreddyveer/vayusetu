@@ -20,8 +20,6 @@ enum SceneDraw {
     static let travel = 1.15, afterGate = 1.0
     /// A scene is ambient, so 30 frames a second reads as smooth and costs half of 60.
     static let frameInterval = 1.0 / 30.0
-    /// With nothing protecting the path the scene only drifts slowly, so it is drawn at half the rate.
-    static let idleFrameInterval = 1.0 / 15.0
 
     static func ease(_ x: Double) -> CGFloat { let c = min(max(x, 0), 1); return CGFloat(c * c * (3 - 2 * c)) }
     static func fract(_ x: Double) -> Double { x - x.rounded(.down) }

@@ -6,7 +6,6 @@ import Foundation
 
 enum FilterNames {
     static let team = "X4MH29QNRS"
-    static let extensionBundleID = "app.vayusetu.macos.filter"
     /// A Mach service name must start with an application group the extension belongs to.
     static let appGroup = team + ".app.vayusetu.filter"
     static let machService = appGroup + ".xpc"

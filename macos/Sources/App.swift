@@ -65,6 +65,14 @@ enum Page: String, CaseIterable, Identifiable {
 /// A compact monochrome version of the VayuSetu mark for the menu bar. The
 /// template rendering keeps it legible against both macOS menu-bar appearances.
 struct DesktopView: View {
+    /// A debug build started with --privacy-check writes a capability report instead of onboarding. Release builds ignore the argument.
+    private static var launchedForPrivacyCheck: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--privacy-check")
+        #else
+        false
+        #endif
+    }
     @ObservedObject var store: AppStore
     @ObservedObject var extensions: ExtensionManager
     @ObservedObject var tunnel: TunnelController
@@ -98,7 +106,7 @@ struct DesktopView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: visibility)
         .alert("VayuSetu", isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } })) { Button("OK") { store.notice = "" } } message: { Text(store.notice) }
         .sheet(isPresented: $onboarding) { NavigationStack { VSOnboardingScreen(store: store) }.frame(minWidth: 520, minHeight: 580) }
-        .onAppear { if !onboarded && !ProcessInfo.processInfo.arguments.contains("--privacy-check") && store.profiles.isEmpty && store.dnsProfiles.isEmpty { onboarding = true } }
+        .onAppear { if !onboarded && !Self.launchedForPrivacyCheck && store.profiles.isEmpty && store.dnsProfiles.isEmpty { onboarding = true } }
         .onChange(of: tunnel.status.rawValue) { _, _ in
             store.invalidateDNS(); network.cancelQuality()
             Task { await store.reconcileNetworkState() }
@@ -123,6 +131,7 @@ struct DesktopView: View {
             }
         }
         .task {
+            #if DEBUG
             let args = ProcessInfo.processInfo.arguments
             if args.contains("--privacy-check") {
                 await store.systemDNS.refresh(); await store.filtering.reload(); tunnel.refreshStatus()
@@ -132,6 +141,7 @@ struct DesktopView: View {
                 return
             }
             if let index = args.firstIndex(of: "--page"), args.indices.contains(index + 1), let page = Page(rawValue: args[index + 1]) { selection = page }
+            #endif
             if preferences.connectOnLaunch && TunnelController.available { for _ in 0..<100 { if tunnel.ready || Task.isCancelled { break }; try? await Task.sleep(for: .milliseconds(100)) }; if !Task.isCancelled { extensions.activate { store.connect() } } }
         }
         // The filter must keep polling even when the user is on Home, Adblock, or has

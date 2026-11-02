@@ -210,8 +210,6 @@ enum WiFiProbe {
     private var domainListener: AnyCancellable?
     static var stallDomainsOn: Bool { UserDefaults.standard.bool(forKey: "stall-domains") }
     func setStallDomains(_ on: Bool) { UserDefaults.standard.set(on, forKey: "stall-domains"); domainRing.setEnabled(on && running) }
-    /// The hashed identity of the connection in use, as the monitor knows it (nil until the monitor has identified the router).
-    var currentNetworkKey: String? { networkKey }
     /// The identity of the connection in use, worked out now from what the system already knows (the router's address, its hardware address from the ARP table, the
     /// network name and the kind of connection). It does not need Watch my connection to be on, sends nothing, and is nil when the router cannot be identified.
     func networkKeyNow() async -> String? {

@@ -231,19 +231,6 @@ struct ProfileUsagePanel: View {
 }
 
 
-struct DNSProbeOptions: View {
-    @ObservedObject var store: AppStore
-    var body: some View {
-        AnyView(DisclosureGroup("Advanced test options") {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Domain to test", text: $store.probeDomain).textContentType(.URL).autocorrectionDisabled()
-                Toggle("Expect NXDOMAIN", isOn: $store.expectNXDOMAIN)
-                Text("For a domain you expect to be blocked. NXDOMAIN can also mean that a domain does not exist; provider filtering still needs independent verification.").font(.caption2).foregroundStyle(.secondary)
-            }.padding(.top, 8).disabled(store.testing)
-        }.font(.caption))
-    }
-}
-
 /// "42.5 Mb/s" from bytes per second.
 enum SpeedFormat {
     static func text(_ bytesPerSecond: Double?) -> String {

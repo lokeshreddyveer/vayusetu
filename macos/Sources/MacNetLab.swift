@@ -125,7 +125,6 @@ struct RecoveryRecord: Codable, Identifiable, Equatable {
         scheduledRecords = ScheduledReport.appended(scheduledRecords, entry)
         if let d = try? JSONEncoder().encode(scheduledRecords) { UserDefaults.standard.set(d, forKey: "netlab-scheduled-records") }
     }
-    func clearScheduledRecords() { scheduledRecords = []; UserDefaults.standard.removeObject(forKey: "netlab-scheduled-records") }
     private var scheduleTask: Task<Void, Never>?
     /// While the app is running, every few hours: look for a sign-in page, see whether the public address moved, and time the name servers. It
     /// records only what changed, in the timeline, and sends a handful of small requests. 0 means off.

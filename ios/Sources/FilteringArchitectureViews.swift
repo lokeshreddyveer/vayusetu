@@ -395,11 +395,3 @@ struct VSRuleMatchScreen: View {
         }.vsHeader("Test a Website", "Would VayuSetu block it, and which rule does?").scrollIndicators(.hidden).background(VSDesign.background).vsInlineTitle()
     }
 }
-struct VSAdblockStatisticsScreen: View {
-    @ObservedObject var filtering: FilteringController
-    var body: some View {
-        VSCardList { VSSection("Configuration counts") { VSRow(title: "Surface", value: "Safari"); VSRow(title: "Selected lists", value: String(filtering.configuration.subscriptions.filter(\.enabled).count)); VSRow(title: "Enabled rules", value: String(filtering.configuration.effective.count)); VSRow(title: "Latest reload", value: filtering.lastReload?.formatted() ?? "Unavailable") }
-            VSSection("Enforcement statistics") { VSRow(title: "Safari blocked requests", value: "Unavailable"); VSRow(title: "Per-domain DNS counts", value: "Unavailable"); Text("Safari’s declarative content blocker does not expose per-request counters. Local DNS interception is unavailable. Configuration counts above are not blocked-request counts.").font(.footnote).foregroundStyle(.secondary) }
-        }.vsList().vsHeader("Available Statistics")
-    }
-}
