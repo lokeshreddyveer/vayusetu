@@ -41,3 +41,6 @@ macos/Resources/Geo/IPv6.bin
 # Performance results: only the redacted canonical baseline is kept in the repository; other sessions stay local.
 macos/perf/*
 !macos/perf/baseline-build-40-merged.json
+
+# Test evidence holds the maker's own network details (public address, VPN servers); it stays on the machine, never in the repository.
+macos/test-evidence/

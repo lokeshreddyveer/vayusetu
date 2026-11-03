@@ -310,6 +310,8 @@ System extensions are installed by macOS, not by the app, and an old version can
 
 **VPN plus DNS starts reliably.** Starting a VPN while a DNS tunnel is running used to stall, because the tunnel looked up the VPN server's name through a DNS service that was in the middle of being replaced. The app now looks up the server's address first, with a four-second limit, and hands the tunnel the address; your saved profile is not changed. On the Mac the tunnel also keeps its own copy of the DNS filter rules, because macOS gives a system extension no shared folder, and the app sends the rules to it whenever it connects or your lists change.
 
+**Reconnecting after a stop.** The tunnel looks up the VPN server's name again each time it starts, with a bounded number of tries and a path check between them, and it gives up cleanly (with the reason on screen) if you stop it meanwhile. It now keeps the last good addresses on disk, inside the tunnel's own cache folder, and uses an answer under an hour old straight away when the system resolver is slow, instead of waiting out the whole start-up budget. The addresses are public provider addresses, they are checked again on every read, and the connection still verifies the provider's name, so a stale address cannot be used to impersonate it. Only addresses VayuSetu has itself looked up are ever saved; it never falls back to some other resolver.
+
 The DNS check does not stop at "the tunnel is up". It resolves a normal name and a name that is on your block lists, retries while the rules reach the tunnel, and says in plain words if the blocked name was **not** blocked.
 
 If the Mac app ever crashes, it writes a short trace of function names (no personal data, nothing sent anywhere) to `~/Library/Logs/VayuSetu/`, because macOS does not always keep a crash report.
@@ -400,6 +402,7 @@ Credentials live in the Keychain. Connection logs and traffic history are option
 - **Cellular radio details** (signal in dBm, tower, band) are not available to any third-party app.
 - **A nearby-network scan is a snapshot,** not a spectrum analysis, and macOS may ask for Location permission before it shows anything.
 - **OpenVPN** is not supported. **Certificate-based IKEv2** is not yet available on the Mac. The Mac app has no QR-code scanner, widgets or Shortcuts actions; it has the `vayusetu://` links above instead.
+- **A fresh VPN + DNS start right after a VPN-only session can still be slow.** The system resolver sometimes stalls for a few seconds after a tunnel ends. VayuSetu retries and reuses recent addresses, and reports the reason if it cannot connect, but it cannot make that stall shorter. The data path of VPN + DNS has been seen to connect without carrying general traffic on earlier test builds, and it is being investigated; check Home's "Is it working?" before relying on it.
 - **Not independently audited.** The code is published for review, but VayuSetu has not had a third-party security audit, and the tunnel has not yet been validated against every network transition.
 
 ## Questions
@@ -431,6 +434,8 @@ The source is published here so you can read and review how VayuSetu works. It i
 | `Extensions/` | The Dynamic Island, widget and Control Center extensions |
 | `Packages/VayuSetuCore/` | Core logic shared by both apps: filter lists and rules, the Safari planner, behavior insights, and the signed-policy and audit building blocks. Run its tests with `swift test` |
 | `Docs/` | Architecture, security and design notes, including [DNS rule precedence](Docs/Architecture/DNS-Rule-Precedence.md) |
+
+**Testing the Mac app.** `macos/tools/verify-release.sh` runs every check in one go (unit tests, type checks, the iPhone compile, and source rules such as "no closures in the SwiftUI environment" and "no test switches in release builds"). `macos/tools/build-perf.sh` and `macos/tools/perf-tour.py` build and run a debug-only tour of every page and nested screen that records frame times, dropped frames, CPU and hangs; see [Mac screen tour](Docs/Testing/Mac-Screen-Tour.md). `macos/tools/probe-vpn-dns.sh` runs the VPN and DNS connection plan on a real Mac and always restores protection to off.
 
 ## Support
 
