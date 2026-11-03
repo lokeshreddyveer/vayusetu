@@ -215,6 +215,9 @@ struct FilterConfiguration: Codable {
     var safariExtensionRules: [String: Int]? = nil
     var safariCandidates: Int? = nil
     var effective: [FilterRule] { rules.filter { $0.enabled != false } + subscriptions.filter(\.enabled).flatMap(\.rules) }
+    /// How many rules apply, counted without building the list. Screens ask this on every redraw; `effective` copies every rule each time.
+    var effectiveCount: Int { rules.reduce(0) { $0 + ($1.enabled != false ? 1 : 0) } + subscriptions.reduce(0) { $0 + ($1.enabled ? $1.rules.count : 0) } }
+    var hasEffectiveRules: Bool { rules.contains { $0.enabled != false } || subscriptions.contains { $0.enabled && !$0.rules.isEmpty } }
     /// Rules after removing repeats: two lists naming the same domain count once, which is what the phone really has to hold.
     var uniqueEffectiveCount: Int {
         var seen = Set<String>()
@@ -432,7 +435,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
     }
     func adblockSnapshot(now: Date = .now) -> ProtectionSnapshot {
         let safari = snapshot(now: now)
-        let intent = configuration.safariDesired && !configuration.effective.isEmpty
+        let intent = configuration.safariDesired && configuration.hasEffectiveRules
         return ProtectionSnapshot(.adblock, desired: intent, state: !intent ? .inactive : safari.observed, source: .extensionAcknowledgement, at: safari.observedAt, stale: safari.stale, reason: "Safari rules: \(configuration.effective.count). Safari does not expose per-request blocking counts. Tunnel-local DNS enforcement is unavailable; upstream filtering is evaluated separately in Checks.")
     }
     func addRule(domain: String, action: FilterAction, scope: FilterScope) async {
@@ -747,7 +750,7 @@ private final class HTTPSListDelegate: NSObject, URLSessionTaskDelegate {
         try? persist(draft); configuration = draft
     }
     func ensureStarterListForDNS() async {
-        guard configuration.effective.isEmpty,
+        guard !configuration.hasEffectiveRules,
               let starter = configuration.subscriptions.first(where: { $0.url == VayuSetuDNS.starterListURL }) else { return }
         await setList(starter.id, enabled: true)
     }

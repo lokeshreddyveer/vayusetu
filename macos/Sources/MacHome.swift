@@ -191,8 +191,8 @@ struct MacHome: View {
     private func bytes(_ value: UInt64?) -> String { value.map { ByteCountFormatter.string(fromByteCount: Int64(clamping: $0), countStyle: .binary) } ?? "—" }
 }
 
-struct ChecksRouteKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
-extension EnvironmentValues { var openChecksPage: (() -> Void)? { get { self[ChecksRouteKey.self] } set { self[ChecksRouteKey.self] = newValue } } }
+struct ChecksRouteKey: EnvironmentKey { static let defaultValue: RouteAction? = nil }
+extension EnvironmentValues { var openChecksPage: RouteAction? { get { self[ChecksRouteKey.self] } set { self[ChecksRouteKey.self] = newValue } } }
 
 /// Today's DNS counts in one line, with a way to the full activity. The charts, rankings and the live view are on the Encrypted DNS page, which
 /// is the only place that counts DNS lookups; showing them again here and on the Adblock page said the same thing three times.

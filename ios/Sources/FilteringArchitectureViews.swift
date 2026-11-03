@@ -23,7 +23,7 @@ struct VSFilterListsScreen: View {
     private var visible: [FilterSubscription] { subscriptions.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) } }
     private var onLists: [FilterSubscription] { visible.filter(\.enabled) }
     private var offLists: [FilterSubscription] { visible.filter { !$0.enabled } }
-    private var totalRules: Int { filtering.configuration.uniqueRules ?? filtering.configuration.effective.count }
+    private var totalRules: Int { filtering.configuration.uniqueRules ?? filtering.configuration.effectiveCount }
     private var hasDownloadable: Bool { subscriptions.contains { $0.enabled && $0.url != "Local file" } }
     private var lastUpdate: Date? { subscriptions.filter(\.enabled).compactMap(\.updated).max() }
     private func compact(_ n: Int) -> String { n >= 1000 ? String(format: "%.0fk", Double(n) / 1000) : String(n) }
@@ -239,7 +239,7 @@ struct VSFilterHealthScreen: View {
         return FilterHealthInput(
             lists: c.subscriptions.map { FilterHealthInput.List(name: $0.name, enabled: $0.enabled, domainRules: $0.rules.count, pageRules: $0.content?.count ?? 0, unsupportedLines: $0.rejected + ($0.content?.unsupported ?? 0), updated: $0.updated) },
             safariOn: c.safariDesired, extensionsNeeded: (c.safariExtensionRules ?? [:]).values.filter { $0 > 0 }.count, extensionsEnabled: enabled, extensionsLoaded: loaded,
-            safariApplied: c.safariApplied ?? 0, safariCandidates: c.safariCandidates ?? 0, uniqueRules: c.uniqueRules ?? c.effective.count, ruleLimit: FilterParser.combinedLimit,
+            safariApplied: c.safariApplied ?? 0, safariCandidates: c.safariCandidates ?? 0, uniqueRules: c.uniqueRules ?? c.effectiveCount, ruleLimit: FilterParser.combinedLimit,
             lastFailure: filtering.failureDetails, now: Date())
     }
     private func tint(_ s: HealthIssue.Severity) -> Color { s == .problem ? .red : s == .warning ? .orange : .secondary }

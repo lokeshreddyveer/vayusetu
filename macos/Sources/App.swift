@@ -100,10 +100,13 @@ struct DesktopView: View {
                     compactSidebar
                     Divider()
                 }
-                NavigationStack { content }.environment(\.openDNSTab, { selection = .dns }).environment(\.openAdblockTab, { selection = .adblock }).environment(\.openProfilesTab, { selection = .profiles }).environment(\.openChecksPage, { selection = .checks })
+                NavigationStack { content }.environment(\.openDNSTab, RouteAction({ selection = .dns })).environment(\.openAdblockTab, RouteAction({ selection = .adblock })).environment(\.openProfilesTab, RouteAction({ selection = .profiles })).environment(\.openChecksPage, RouteAction({ selection = .checks }))
             }.background(VSDesign.background)
         }.navigationSplitViewStyle(.balanced).scrollIndicators(.hidden).environment(\.extensionManager, extensions).environment(\.wifiWatcher, wifi).vsDialogHost()
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: visibility)
+        #if DEBUG
+        .onReceive(NotificationCenter.default.publisher(for: .perfTourPage)) { note in if let name = note.userInfo?["page"] as? String, let page = Page(rawValue: name) { selection = page } }
+        #endif
         .alert("VayuSetu", isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } })) { Button("OK") { store.notice = "" } } message: { Text(store.notice) }
         .sheet(isPresented: $onboarding) { NavigationStack { VSOnboardingScreen(store: store) }.frame(minWidth: 520, minHeight: 580) }
         .onAppear { if !onboarded && !Self.launchedForPrivacyCheck && store.profiles.isEmpty && store.dnsProfiles.isEmpty { onboarding = true } }
@@ -132,6 +135,11 @@ struct DesktopView: View {
         }
         .task {
             #if DEBUG
+            if PerfTour.argument("--perf-tour") != nil || PerfTour.argument("--perf-tour-dump") != nil {
+                await PerfTour.shared.run(output: PerfTour.argument("--perf-tour"), dump: PerfTour.argument("--perf-tour-dump"),
+                                          pages: (PerfTour.argument("--perf-pages")?.components(separatedBy: ",")) ?? Page.allCases.map(\.rawValue))
+                return
+            }
             let args = ProcessInfo.processInfo.arguments
             if args.contains("--privacy-check") {
                 await store.systemDNS.refresh(); await store.filtering.reload(); tunnel.refreshStatus()

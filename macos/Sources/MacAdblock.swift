@@ -16,7 +16,7 @@ struct MacAdblock: View {
 
     private var safari: (label: String, detail: String, tint: Color) {
         if !config.safariDesired { return ("Off", "VayuSetu is not blocking in Safari.", .secondary) }
-        if config.effective.isEmpty { return ("No lists", "Turn on a filter list to give Safari rules.", .orange) }
+        if !config.hasEffectiveRules { return ("No lists", "Turn on a filter list to give Safari rules.", .orange) }
         switch filtering.enabled {
         case .some(true) where filtering.packageReady: return ("Active", "Rules are loaded in \(filtering.neededExtensions.count) extension\(filtering.neededExtensions.count == 1 ? "" : "s") and enabled in Safari.", .green)
         case .some(true): return ("Not loaded", "The extension is enabled; rules have not loaded yet.", .orange)
@@ -26,7 +26,7 @@ struct MacAdblock: View {
     }
     private var rulesLoaded: String {
         guard filtering.packageReady, config.safariDesired else { return "None" }
-        let applied = config.safariApplied ?? config.effective.count
+        let applied = config.safariApplied ?? config.effectiveCount
         if let total = config.safariCandidates, applied < total { return "\(applied.formatted()) of \(total.formatted())" }
         return applied.formatted()
     }
@@ -167,6 +167,6 @@ struct MacAdblock: View {
         }
     }
     private func link<D: View>(_ title: String, _ detail: String, icon: String, @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain)
+        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain).perfTarget("nav.\(title)")
     }
 }

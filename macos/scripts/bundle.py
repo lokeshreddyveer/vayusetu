@@ -5,7 +5,7 @@ import subprocess
 root=Path(__file__).resolve().parents[1]
 app=root/'dist/VayuSetu.app'
 VERSION=json.loads((Path(__file__).resolve().parent/'version.json').read_text())   # the one place the Mac version lives
-info={'CFBundleName':'VayuSetu','CFBundleDisplayName':'VayuSetu','CFBundleIdentifier':'app.vayusetu.macos.preview','CFBundleExecutable':'VayuSetu','CFBundlePackageType':'APPL','CFBundleShortVersionString':VERSION['marketing'],'CFBundleVersion':VERSION['build'],'CFBundleIconFile':'AppIcon','LSMinimumSystemVersion':'14.0','NSHighResolutionCapable':True,'NSPrincipalClass':'NSApplication','NSHumanReadableCopyright':'VayuSetu by R3dby'}
+info={'CFBundleName':'VayuSetu','CFBundleDisplayName':'VayuSetu','CFBundleIdentifier':'app.vayusetu.macos.preview','CFBundleExecutable':'VayuSetu','CFBundlePackageType':'APPL','CFBundleShortVersionString':VERSION['marketing'],'CFBundleVersion':VERSION['build'],'CFBundleIconFile':'AppIcon','NSAccentColorName':'AccentColor','LSMinimumSystemVersion':'14.0','NSHighResolutionCapable':True,'NSPrincipalClass':'NSApplication','NSHumanReadableCopyright':'VayuSetu by R3dby'}
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 iconset=root/'build/AppIcon.iconset';iconset.mkdir(exist_ok=True)
 source=root.parent/'Design/AppIcons/ArtisticBridge/VayuSetu-macOS-1024.png'

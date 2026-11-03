@@ -46,7 +46,7 @@ struct MacSetupGuide: View {
     @ViewBuilder private func guide(_ all: [SetupStep]) -> some View {
         if !dismissed, !completed, !SetupGuide.isComplete(all) {
             let progress = SetupGuide.progress(all)
-            MacPanel("Get VayuSetu ready", icon: "list.bullet.clipboard", trailing: { MacChip(text: "\(progress.done) of \(progress.total)", tint: .blue) }) {
+            MacPanel("Get VayuSetu ready", icon: "list.bullet.clipboard", trailing: { MacChip(text: "\(progress.done) of \(progress.total)", tint: VSDesign.accent) }) {
                 VStack(alignment: .leading, spacing: 10) {
                     MacSetupRoad(done: progress.done, total: progress.total)
                     ForEach(all) { step in

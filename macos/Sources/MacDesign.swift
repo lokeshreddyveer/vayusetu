@@ -7,8 +7,25 @@ struct MacPanelLayout: Layout {
     var minimumColumnWidth: CGFloat = 440
     var spacing: CGFloat = 16
 
-    private func arrangement(width: CGFloat, subviews: Subviews) -> (height: CGFloat, frames: [CGRect]) {
-        let columns = width >= minimumColumnWidth * 2 + spacing ? 2 : 1
+    /// The column count is sticky: it changes only once the width is clearly past the switch point. Without that, a width near the point flips
+    /// one column ⇄ two, the page height changes, the scroll bar comes and goes, the width moves by its thickness, and layout never settles.
+    struct Cache { var columns: Int? }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {}
+    private static let margin: CGFloat = 24
+    private func columns(for width: CGFloat, _ cache: inout Cache) -> Int {
+        let switchPoint = minimumColumnWidth * 2 + spacing
+        let count: Int
+        switch cache.columns {
+        case 2?: count = width < switchPoint - Self.margin ? 1 : 2
+        case 1?: count = width >= switchPoint + Self.margin ? 2 : 1
+        default: count = width >= switchPoint ? 2 : 1
+        }
+        cache.columns = count
+        return count
+    }
+
+    private func arrangement(width: CGFloat, columns: Int, subviews: Subviews) -> (height: CGFloat, frames: [CGRect]) {
         let columnWidth = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
         var heights = Array(repeating: CGFloat.zero, count: columns)
         var frames: [CGRect] = []
@@ -21,13 +38,13 @@ struct MacPanelLayout: Layout {
         return (max(0, (heights.max() ?? 0) - spacing), frames)
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width = proposal.width ?? minimumColumnWidth
-        return CGSize(width: width, height: arrangement(width: width, subviews: subviews).height)
+        return CGSize(width: width, height: arrangement(width: width, columns: columns(for: width, &cache), subviews: subviews).height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (view, frame) in zip(subviews, arrangement(width: bounds.width, subviews: subviews).frames) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        for (view, frame) in zip(subviews, arrangement(width: bounds.width, columns: columns(for: bounds.width, &cache), subviews: subviews).frames) {
             view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
                        proposal: ProposedViewSize(width: frame.width, height: frame.height))
         }
@@ -43,15 +60,18 @@ struct MacPanel<Content: View, Trailing: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                if let icon { Image(systemName: icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(VSDesign.accent) }
-                Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.1).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
+            HStack(spacing: 9) {
+                if let icon {
+                    Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(VSDesign.accent)
+                        .frame(width: 24, height: 24).background(VSDesign.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.primary).lineLimit(1).layoutPriority(1)
                 Spacer(minLength: 8)
                 trailing.fixedSize()
             }
-            content
+            content.lineSpacing(1.5)
         }
-        .padding(18).frame(maxWidth: .infinity, alignment: .leading).macPanel().macAppear()
+        .padding(20).frame(maxWidth: .infinity, alignment: .leading).macPanel().macAppear()
     }
 }
 extension MacPanel where Trailing == EmptyView {
@@ -71,12 +91,20 @@ struct MacPage<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let extensions { ExtensionBanner(extensions: extensions) }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.system(size: 26, weight: .semibold, design: .rounded))
-                    if !subtitle.isEmpty { Text(subtitle).font(.subheadline).foregroundStyle(.secondary) }
-                }
+                HStack(alignment: .center, spacing: 14) {
+                    if let icon = Page(rawValue: title)?.icon {
+                        Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(VSDesign.actionInk)
+                            .frame(width: 44, height: 44)
+                            .background(LinearGradient(colors: [VSDesign.accent, VSDesign.accent.opacity(0.72)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: VSDesign.accent.opacity(0.25), radius: 8, y: 3)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.system(size: 26, weight: .bold, design: .rounded))
+                        if !subtitle.isEmpty { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary) }
+                    }
+                }.padding(.bottom, 4)
                 content
-            }.frame(maxWidth: 1120, alignment: .leading).padding(24).frame(maxWidth: .infinity, alignment: .topLeading)
+            }.frame(maxWidth: 1120, alignment: .leading).padding(.horizontal, 28).padding(.vertical, 26).frame(maxWidth: .infinity, alignment: .top)
         }.scrollIndicators(.hidden).background(VSDesign.background).navigationTitle(title)
     }
 }
@@ -144,6 +172,29 @@ struct MacRow<Control: View>: View {
     }
 }
 
+/// Background reading for a panel: a short "How this works" line that opens to the full explanation, so the panel leads with what it shows
+/// and does instead of a paragraph.
+struct MacExplainer: View {
+    let text: String
+    var title = "How this works"
+    @State private var open = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { open.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "info.circle")
+                    Text(title)
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(open ? 90 : 0))
+                }.font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityHint(open ? "Hides the explanation" : "Shows the explanation")
+            if open {
+                Text(text).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
+            }
+        }.macAnimate(.easeInOut(duration: 0.22), value: open)
+    }
+}
+
 /// A big number with a caption, for live figures.
 struct MacFigure: View {
     let caption: String
@@ -178,7 +229,7 @@ struct MacHoverButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .foregroundStyle(prominent ? Color.white : VSDesign.accent)
+            .foregroundStyle(prominent ? VSDesign.actionInk : VSDesign.accent)
             .background((prominent ? VSDesign.accent : VSDesign.accent.opacity(hovering ? 0.22 : 0.13)).opacity(configuration.isPressed ? 0.7 : 1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .macAnimate(.easeOut(duration: 0.12), value: configuration.isPressed).macAnimate(.easeOut(duration: 0.15), value: hovering)

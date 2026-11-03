@@ -149,7 +149,7 @@ struct MacDNS: View {
                     Text(report.summary).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("Checked \(report.date.formatted(date: .omitted, time: .shortened)) through \(report.resolver).").font(.system(size: 11)).foregroundStyle(.tertiary)
                 } else {
-                    Text("Asks for three well-known names whose addresses never change (Cloudflare, Google and Quad9's own) and compares what comes back. If your resolver or network rewrites answers, they will not match. It sends three lookups through the resolver you use and nothing to anyone else. A name your resolver blocks on purpose is not treated as tampering.").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    MacExplainer(text: "Asks for three well-known names whose addresses never change (Cloudflare, Google and Quad9's own) and compares what comes back. If your resolver or network rewrites answers, they will not match. It sends three lookups through the resolver you use and nothing to anyone else. A name your resolver blocks on purpose is not treated as tampering.")
                 }
             }
         }
@@ -189,7 +189,7 @@ struct MacDNS: View {
         }
     }
     private func link<D: View>(_ title: String, _ detail: String, icon: String, @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain)
+        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain).perfTarget("nav.\(title)")
     }
     private func edit(_ profile: DNSProfile?) {
         do {

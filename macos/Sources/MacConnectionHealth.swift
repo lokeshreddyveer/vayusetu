@@ -181,7 +181,7 @@ struct MacConnectionHealth: View {
                         Picker("", selection: $lab.scheduleHours) { Text("never").tag(0); Text("every hour").tag(1); Text("every 3 hours").tag(3); Text("every 6 hours").tag(6) }.labelsHidden().frame(width: 150)
                         if let d = lab.lastScheduled { Text("last \(d.formatted(date: .omitted, time: .shortened))").font(.system(size: 11)).foregroundStyle(.secondary) }
                     }
-                    Text("The quick check asks Apple's connectivity page whether a sign-in page is in the way, asks api.ipify.org for your public address, and times the system resolver, Cloudflare and Google: about 20 small requests, never on a connection that costs data, and written to the Timeline only when something changed. It runs only while monitoring is on.").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    MacExplainer(text: "The quick check asks Apple's connectivity page whether a sign-in page is in the way, asks api.ipify.org for your public address, and times the system resolver, Cloudflare and Google: about 20 small requests, never on a connection that costs data, and written to the Timeline only when something changed. It runs only while monitoring is on.")
                     Text("About 1 KB a minute. On a hotspot or low-data connection it slows to one check every 12 seconds.").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }

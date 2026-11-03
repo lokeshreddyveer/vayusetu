@@ -20,8 +20,8 @@ private enum VSStoredProfile: Identifiable {
     var created: Date? { if case .wireGuard(let value) = self { return value.created }; return nil }
     var endpoints: [String] { if case .wireGuard(let value) = self { return value.endpoints }; return [] }
 }
-private struct ProfilesRouteKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
-extension EnvironmentValues { var openProfilesTab: (() -> Void)? { get { self[ProfilesRouteKey.self] } set { self[ProfilesRouteKey.self] = newValue } } }
+private struct ProfilesRouteKey: EnvironmentKey { static let defaultValue: RouteAction? = nil }
+extension EnvironmentValues { var openProfilesTab: RouteAction? { get { self[ProfilesRouteKey.self] } set { self[ProfilesRouteKey.self] = newValue } } }
 
 struct VSProfilesScreen: View {
     @ObservedObject var store: AppStore

@@ -24,6 +24,7 @@ enum VSDesign {
     static let background = adaptive(dark: 0x070B12, light: 0xF2F3F5)
     static let surface = adaptive(dark: 0x111A25, light: 0xFFFFFF)
     static let elevated = adaptive(dark: 0x192535, light: 0xFFFFFF)
+    static let panelRadius: CGFloat = 14
     #endif
     private static func adaptive(dark: Int, light: Int) -> Color {
         func components(_ hex: Int) -> (Double, Double, Double) { (Double((hex >> 16) & 255) / 255, Double((hex >> 8) & 255) / 255, Double(hex & 255) / 255) }

@@ -54,11 +54,11 @@ struct MacSegmented<Option: Hashable>: View {
                 let chosen = option == selection
                 Button { selection = option } label: {
                     Text(title(option)).font(.system(size: 13, weight: chosen ? .semibold : .regular))
-                        .foregroundStyle(chosen ? Color.white : Color.primary.opacity(0.85))
+                        .foregroundStyle(chosen ? VSDesign.actionInk : Color.primary.opacity(0.85))
                         .padding(.horizontal, 14).frame(height: 24)
                         .background(chosen ? VSDesign.accent : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityAddTraits(chosen ? .isSelected : [])
+                }.buttonStyle(.plain).accessibilityAddTraits(chosen ? .isSelected : []).perfTarget("tab.\(title(option))")
             }
         }
         .padding(2).background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous)).fixedSize()

@@ -641,7 +641,7 @@ struct MacNetwork: View {
                     MacRow(icon: "chart.bar", title: "Count traffic per connection", detail: "Shows how much each app sends and receives. While this is on, the filter reads the data of every allowed connection to count it, which can slow heavy transfers. Off by default.") {
                         Toggle("", isOn: Binding(get: { client.settings.countTraffic }, set: { var s = client.settings; s.countTraffic = $0; client.update(settings: s) })).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel("Count traffic per connection")
                     }
-                    Text("Order of decision: your own and loopback traffic → a block list (unless a rule names the app and allows it) → your rules, most specific first → an allow list → Apple-signed software → the mode. At equal specificity, a block beats an allow.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    MacExplainer(text: "Order of decision: your own and loopback traffic → a block list (unless a rule names the app and allows it) → your rules, most specific first → an allow list → Apple-signed software → the mode. At equal specificity, a block beats an allow.")
                 }
             }
             profilesPanel
@@ -711,7 +711,7 @@ struct MacNetwork: View {
                         }
                         Text("A window that ends before it starts runs overnight into the next day.").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    Text("A domain such as example.com also covers its subdomains; *.example.com covers only the subdomains; 10.0.0.0/8 or 10.0.0.1-10.0.0.50 cover addresses. Use * for any destination or any port. Groups can be switched on and off together, and a rule with an expiry stops counting by itself.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    MacExplainer(text: "A domain such as example.com also covers its subdomains; *.example.com covers only the subdomains; 10.0.0.0/8 or 10.0.0.1-10.0.0.50 cover addresses. Use * for any destination or any port. Groups can be switched on and off together, and a rule with an expiry stops counting by itself.")
                 }
             }
             MacPanel("Your rules", icon: "list.bullet", trailing: {
@@ -775,7 +775,7 @@ struct MacNetwork: View {
     // MARK: Profiles
     @State private var profileName = ""
     private var profilesPanel: some View {
-        MacPanel("Profiles", icon: "person.2", trailing: { if let name = client.activeProfile { MacChip(text: name, tint: .blue) } }) {
+        MacPanel("Profiles", icon: "person.2", trailing: { if let name = client.activeProfile { MacChip(text: name, tint: VSDesign.accent) } }) {
             VStack(alignment: .leading, spacing: 10) {
                 if client.profiles.isEmpty { Text("A profile keeps your rules and settings under a name, so you can switch between Home, Work or Public Wi-Fi in one click.").font(.system(size: 12)).foregroundStyle(.secondary) }
                 ForEach(client.profiles) { profile in
@@ -810,7 +810,7 @@ struct MacNetwork: View {
         VStack(spacing: 20) {
             MacPanel("Block lists and allow lists", icon: "list.bullet.rectangle") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("A block list stops every connection to its destinations, for every app, unless one of your rules names an app and allows it. An allow list lets its destinations through without a question. Lists refresh on their own while VayuSetu is open.").font(.system(size: 12)).foregroundStyle(.secondary)
+                    MacExplainer(text: "A block list stops every connection to its destinations, for every app, unless one of your rules names an app and allows it. An allow list lets its destinations through without a question. Lists refresh on their own while VayuSetu is open.")
                     if client.lists.isEmpty { Text("No lists yet.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60) }
                     ForEach(client.lists) { list in
                         MacRow(icon: list.kind == .block ? "hand.raised.fill" : "checkmark.shield", title: list.name, detail: listDetail(list), tint: list.kind == .block ? .red : .green) {

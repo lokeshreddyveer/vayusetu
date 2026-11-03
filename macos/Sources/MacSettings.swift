@@ -146,6 +146,6 @@ struct MacSettings: View {
         MacRow(icon: icon, title: title, detail: detail) { Toggle("", isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.small).accessibilityLabel(title) }
     }
     private func link<D: View>(_ title: String, _ detail: String, icon: String, @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain)
+        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain).perfTarget("nav.\(title)")
     }
 }

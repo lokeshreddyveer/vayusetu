@@ -8,10 +8,20 @@ struct VSResolverDraft: Identifiable {
     var endpoint: String
     var bootstrapAddresses: [String] = []
 }
-private struct DNSRouteKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
-private struct AdblockRouteKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
-extension EnvironmentValues { var openAdblockTab: (() -> Void)? { get { self[AdblockRouteKey.self] } set { self[AdblockRouteKey.self] = newValue } } }
-extension EnvironmentValues { var openDNSTab: (() -> Void)? { get { self[DNSRouteKey.self] } set { self[DNSRouteKey.self] = newValue } } }
+/// A "switch to that tab" action handed down through the environment. SwiftUI cannot compare closures, so a bare closure in the environment
+/// counts as changed on every update, and every screen reading it is rebuilt every time (on the Mac, a screen pushed onto the Adblock page
+/// then re-rendered without end and froze the window). Two actions compare equal: the action only sets a tab selection held in state
+/// that stays the same, so the first one is always right.
+struct RouteAction: Equatable {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+    func callAsFunction() { run() }
+    static func == (lhs: RouteAction, rhs: RouteAction) -> Bool { true }
+}
+private struct DNSRouteKey: EnvironmentKey { static let defaultValue: RouteAction? = nil }
+private struct AdblockRouteKey: EnvironmentKey { static let defaultValue: RouteAction? = nil }
+extension EnvironmentValues { var openAdblockTab: RouteAction? { get { self[AdblockRouteKey.self] } set { self[AdblockRouteKey.self] = newValue } } }
+extension EnvironmentValues { var openDNSTab: RouteAction? { get { self[DNSRouteKey.self] } set { self[DNSRouteKey.self] = newValue } } }
 
 struct VSDNSScreen: View {
     @ObservedObject var store: AppStore
@@ -277,7 +287,7 @@ struct VSDNSScreen: View {
             if store.isVayuSetuDNSSelected {
                 VSFormSection {
                     NavigationLink { VSFilterListsScreen(filtering: store.filtering) } label: {
-                        VSRow(title: "VayuSetu filter lists", subtitle: "\(store.filtering.configuration.subscriptions.filter(\.enabled).count) enabled · \(store.filtering.configuration.effective.count) rules", icon: "line.3.horizontal.decrease.circle", chevron: true)
+                        VSRow(title: "VayuSetu filter lists", subtitle: "\(store.filtering.configuration.subscriptions.filter(\.enabled).count) enabled · \(store.filtering.configuration.effectiveCount) rules", icon: "line.3.horizontal.decrease.circle", chevron: true)
                     }.accessibilityIdentifier("DNSFilterLists")
                     Toggle("Resolve outside the VPN", isOn: $store.dnsUpstreamDirect).disabled(tunnel.running || tunnel.busy)
                         .accessibilityIdentifier("DNSUpstreamDirect")
@@ -469,7 +479,7 @@ struct VSDNSDiagnosticsScreen: View {
                         VSRow(title: "Filter rules loaded", value: "\(c.rules)")
                     }
                 } else { VSRow(title: "Query counters", value: "Unavailable for this runtime") }
-                VSRow(title: "Filter lists configured", value: "\(store.filtering.configuration.subscriptions.filter(\.enabled).count) lists · \((store.filtering.configuration.uniqueRules ?? store.filtering.configuration.effective.count).formatted()) rules")
+                VSRow(title: "Filter lists configured", value: "\(store.filtering.configuration.subscriptions.filter(\.enabled).count) lists · \((store.filtering.configuration.uniqueRules ?? store.filtering.configuration.effectiveCount).formatted()) rules")
                 VSRow(title: "Last verification", value: store.dnsVerification.map { ($0.passed ? "Passed" : "Failed") + " · " + $0.date.formatted(date: .abbreviated, time: .shortened) } ?? "None yet")
                 if let check = store.dnsVerification { Text(check.detail).font(.footnote).foregroundStyle(.secondary) }
             }
@@ -684,7 +694,7 @@ extension VSDNSScreen {
         var parts = lists.prefix(2).map { $0.name }
         if lists.count > 2 { parts.append("+\(lists.count - 2)") }
         if own > 0 { parts.append("\(own) custom") }
-        let total = store.filtering.configuration.effective.count
+        let total = store.filtering.configuration.effectiveCount
         return parts.joined(separator: ", ") + (total > 0 ? " · " + (total >= 1000 ? String(format: "%.0fk", Double(total) / 1000) : String(total)) : "")
     }
     /// VayuSetu's lists are applied only by VayuSetu DNS. With another resolver the row is informational and cannot be opened.

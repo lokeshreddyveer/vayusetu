@@ -19,6 +19,8 @@ cp ../ios/Configuration/PrivacyInfo.xcprivacy "$app/Contents/Resources/PrivacyIn
 cp ../ios/Configuration/ThirdPartyNotices.txt "$app/Contents/Resources/"
 bash scripts/build-safari.sh "$app"
 cp -R Resources/Geo "$app/Contents/Resources/"
+# The accent colour (sidebar selection, switches, check boxes, focus rings) comes from the asset catalogue, so system controls match the app.
+xcrun actool Resources/Assets.xcassets --compile "$app/Contents/Resources" --platform macosx --minimum-deployment-target 14.0 --output-format human-readable-text --notices --warnings >/dev/null
 codesign --force --sign - --options runtime "$app"
 codesign --verify --deep --strict "$app"
 printf 'Built universal VayuSetu.app (local ad-hoc signing).\n'

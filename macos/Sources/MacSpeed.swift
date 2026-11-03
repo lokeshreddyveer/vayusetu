@@ -364,7 +364,7 @@ struct MacSpeedPanel: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .center, spacing: 18) {
                     MacSpeedGauge(value: test.running && test.phase != .latency ? test.liveRate : tracker.down, best: currentMode.flatMap { tracker.entry(for: $0)?.best.topDown } ?? 0)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 16)], alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 14) {
                         MacFigure(caption: test.running ? test.phaseText : "Right now ↓", value: test.running && test.phase != .latency ? SpeedFormat.text(test.liveRate) : SpeedFormat.text(tracker.down), tint: VSDesign.accent)
                         MacFigure(caption: "Right now ↑", value: SpeedFormat.text(tracker.up), tint: .green)
                     }
@@ -374,8 +374,7 @@ struct MacSpeedPanel: View {
                 Divider()
                 topSpeeds
                 if !tracker.history.isEmpty { Divider(); historyList }
-                Text("Speeds are measured by the speed test, in each mode, and the best one is kept. \"Right now\" and the dial watch the network port and use no data; they count everything the port carries, so they show activity, not your connection's speed. A test opens several connections to Apple's or Cloudflare's public speed servers and uses data: up to about 600 MB down and 300 MB up on a fast line, less on a slow one.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                MacExplainer(text: "Speeds are measured by the speed test, in each mode, and the best one is kept. \"Right now\" and the dial watch the network port and use no data; they count everything the port carries, so they show activity, not your connection's speed. A test opens several connections to Apple's or Cloudflare's public speed servers and uses data: up to about 600 MB down and 300 MB up on a fast line, less on a slow one.")
             }
         }
         .alert("This connection costs data", isPresented: $confirmMetered) {

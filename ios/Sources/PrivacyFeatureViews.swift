@@ -118,7 +118,7 @@ struct VSAdblockScreen: View {
     /// One honest line for Safari, from what the system reports and what the last reload acknowledged.
     private var safariState: (label: String, detail: String, tint: Color) {
         if !config.safariDesired { return ("Off", "VayuSetu is not blocking in Safari.", .secondary) }
-        if config.effective.isEmpty { return ("No lists", "Turn on a filter list to give Safari rules.", .orange) }
+        if !config.hasEffectiveRules { return ("No lists", "Turn on a filter list to give Safari rules.", .orange) }
         switch filtering.enabled {
         case .some(true) where filtering.packageReady: return ("Active", "Rules loaded in \(filtering.neededExtensions.count) extension\(filtering.neededExtensions.count == 1 ? "" : "s") and enabled in Safari.", .green)
         case .some(true): return ("Not loaded", "The extension is enabled; rules have not loaded yet.", .orange)
@@ -128,7 +128,7 @@ struct VSAdblockScreen: View {
     }
     private var rulesLoaded: String {
         guard filtering.packageReady, config.safariDesired else { return "None" }
-        let applied = config.safariApplied ?? config.effective.count
+        let applied = config.safariApplied ?? config.effectiveCount
         if let total = config.safariCandidates, applied < total { return "\(applied.formatted()) of \(total.formatted())" }
         return applied.formatted()
     }
@@ -667,7 +667,7 @@ struct VSFilteringSettingsScreen: View {
     }
     private var summary: (label: String, detail: String, tint: Color) {
         if !config.safariDesired { return ("Off", "Safari protection is switched off on the Adblock screen.", .secondary) }
-        if config.effective.isEmpty && (config.resourceBlocks ?? []).isEmpty { return ("No filters", "Turn on a filter below.", .orange) }
+        if !config.hasEffectiveRules && (config.resourceBlocks ?? []).isEmpty { return ("No filters", "Turn on a filter below.", .orange) }
         if filtering.enabled == true && filtering.packageReady { return ("Applied", "Extension enabled and rules loaded. Extension status and applied rules are verified separately.", .green) }
         if filtering.enabled == false { return ("Extension off", "Enable VayuSetu in Settings → Apps → Safari → Extensions.", .orange) }
         return ("Configured", "Saved, waiting for Safari to confirm the rules.", .orange)

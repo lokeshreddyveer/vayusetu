@@ -11,8 +11,15 @@ struct MacBrandArtwork: View {
 }
 
 extension View {
+    /// A raised card: the surface colour with a faint light from above, a hairline edge that is brighter at the top, and a soft shadow.
+    /// The shadow sits on the background shape only, so the content is not rendered offscreen and scrolling stays cheap.
     func macPanel() -> some View {
-        background(VSDesign.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.primary.opacity(0.055), lineWidth: 1))
+        let shape = RoundedRectangle(cornerRadius: VSDesign.panelRadius, style: .continuous)
+        return background(
+            shape.fill(VSDesign.surface)
+                .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(0.035), .clear], startPoint: .top, endPoint: .center)))
+                .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
+        )
+        .overlay(shape.strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.11), Color.primary.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }

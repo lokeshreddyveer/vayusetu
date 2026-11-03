@@ -50,7 +50,7 @@ struct RootView: View {
             NavigationStack { AnyView(VSDNSScreen(store: store, tunnel: tunnel, isRootTab: true)) }.tabItem { Label { Text("DNS") } icon: { Image(uiImage: PrivacyTabArtwork.image(.dns)).renderingMode(.template) } }.tag(2)
             NavigationStack { AnyView(VSAdblockScreen(filtering: store.filtering, store: store, isRootTab: true)) }.tabItem { Label { Text("Adblock") } icon: { Image(uiImage: PrivacyTabArtwork.image(.adblock)).renderingMode(.template) } }.tag(3)
             NavigationStack { AnyView(VSSettingsScreen(store: store, tunnel: tunnel)) }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
-        }.onChange(of: tunnel.statsSampleRevision) { _, _ in store.filtering.ingest(tunnel.stats?.dnsCounters) }.environment(\.openDNSTab, { tab = 2 }).environment(\.openAdblockTab, { tab = 3 }).environment(\.openProfilesTab, { tab = 1 }).vsAlert(isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } }), tone: .info, icon: "bell.badge.fill", title: "VayuSetu", message: store.notice, then: { store.notice = "" })
+        }.onChange(of: tunnel.statsSampleRevision) { _, _ in store.filtering.ingest(tunnel.stats?.dnsCounters) }.environment(\.openDNSTab, RouteAction({ tab = 2 })).environment(\.openAdblockTab, RouteAction({ tab = 3 })).environment(\.openProfilesTab, RouteAction({ tab = 1 })).vsAlert(isPresented: Binding(get: { !store.notice.isEmpty }, set: { if !$0 { store.notice = "" } }), tone: .info, icon: "bell.badge.fill", title: "VayuSetu", message: store.notice, then: { store.notice = "" })
         .sensoryFeedback(.selection, trigger: tab)
         .onChange(of: "\(store.vpnPill)-\(store.dnsPill)-\(store.adblockPill)-\(store.connectionName ?? "")") { _, _ in store.publishWidgetStatus(); liveActivity.observe(activitySnapshot, enabled: liveActivityEnabled, canStart: scenePhase == .active) }
         .task { ProtectionActionInbox.handler = { action in Task { await store.perform(action) } } }
@@ -58,7 +58,7 @@ struct RootView: View {
         #if DEBUG
         // `--ui-screen <name>` opens one screen on its own, so every screen can be looked at without tapping through the app.
         .fullScreenCover(isPresented: .constant(DebugScreens.requested != nil)) {
-            NavigationStack { DebugScreens.view(store: store, tunnel: tunnel, network: network) }.environment(\.openDNSTab, { }).environment(\.openAdblockTab, { }).environment(\.openProfilesTab, { })
+            NavigationStack { DebugScreens.view(store: store, tunnel: tunnel, network: network) }.environment(\.openDNSTab, RouteAction({ })).environment(\.openAdblockTab, RouteAction({ })).environment(\.openProfilesTab, RouteAction({ }))
         }
         #endif
         // Decisions can start from any tab (Home pills, DNS toggle), so the confirmation lives at the root.
