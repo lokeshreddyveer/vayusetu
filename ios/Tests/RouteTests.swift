@@ -133,11 +133,26 @@ import NetworkExtension
             let up = try ResolverBootstrap.resolveResilient(host: "settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in calls += 1; if calls < 3 { throw AppIssue(message: "not yet") }; return ["1.1.1.1"] },
                                                            pathSatisfied: { true }, pause: { pauses.append($0) })
             require(up.addresses == ["1.1.1.1"] && up.source == .live(attempt: 3) && pauses == [0.5, 1], "bootstrap succeeds on the third try after pausing 0.5 s then 1 s")
-            clock = clock.addingTimeInterval(3600); calls = 0; pauses = []
+            clock = clock.addingTimeInterval(2 * 3600); calls = 0; pauses = []
             let kept = try ResolverBootstrap.resolveResilient(host: "Settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in calls += 1; throw AppIssue(message: "down") },
                                                              pathSatisfied: { true }, pause: { pauses.append($0) })
-            require(kept.addresses == ["1.1.1.1"] && kept.source == .cached(age: 3600) && calls == policy.attempts, "saved addresses used only after every live try failed")
+            require(kept.addresses == ["1.1.1.1"] && kept.source == .cached(age: 7200) && calls == policy.attempts, "saved addresses older than an hour are used only after every live try failed")
             require(pauses.reduce(0, +) <= 3.5, "waiting between tries is bounded: \(pauses.reduce(0, +)) s")
+            // Recent saved addresses connect straight after the first failed try, with no pauses.
+            let fresh = ResolverBootstrap.Cache(); fresh.store("quick.test", ["1.1.1.1"], at: clock.addingTimeInterval(-600)); calls = 0; pauses = []
+            let quick = try ResolverBootstrap.resolveResilient(host: "quick.test", policy: policy, cache: fresh, now: { clock }, lookup: { _ in calls += 1; throw AppIssue(message: "stalled") }, pathSatisfied: { true }, pause: { pauses.append($0) })
+            require(quick.source == .cached(age: 600) && calls == 1 && pauses.isEmpty, "a recent saved answer is used after one failed try")
+            // Saved addresses survive a new process: written to disk, read back, and bad ones are still refused.
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("resolver-\(UUID().uuidString).json"); defer { try? FileManager.default.removeItem(at: file) }
+            ResolverBootstrap.Cache(file: file).store("Disk.test", ["9.9.9.9"], at: clock)
+            let reopened = ResolverBootstrap.Cache(file: file)
+            require(reopened.recent("disk.test", now: clock.addingTimeInterval(60), maximumAge: 3600)?.addresses == ["9.9.9.9"], "saved addresses survive a new process")
+            require(reopened.recent("disk.test", now: clock.addingTimeInterval(7200), maximumAge: 3600) == nil, "saved addresses expire on disk too")
+            require(((try? FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]) as? Int) == 0o600, "saved addresses file is private")
+            try Data("{\"bad.test\":{\"addresses\":[\"127.0.0.1\"],\"at\":\(clock.timeIntervalSince1970)}}".utf8).write(to: file)
+            require(ResolverBootstrap.Cache(file: file).recent("bad.test", now: clock, maximumAge: 3600) == nil, "a loopback address read from disk is refused")
+            try Data("not json".utf8).write(to: file)
+            require(ResolverBootstrap.Cache(file: file).recent("disk.test", now: clock, maximumAge: 3600) == nil, "a damaged file is ignored")
             clock = clock.addingTimeInterval(7 * 3600)
             do { _ = try ResolverBootstrap.resolveResilient(host: "settle.test", policy: policy, cache: cache, now: { clock }, lookup: { _ in throw AppIssue(message: "down") }, pathSatisfied: { true }, pause: { _ in }); fatalError("Expired saved addresses used") }
             catch { checks += 1; require((error as? AppIssue)?.message.contains("4 tries") == true, "failure after expiry says how many tries were made") }

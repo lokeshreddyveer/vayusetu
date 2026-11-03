@@ -238,6 +238,8 @@ enum ResolverBootstrap {
         /// 10 s, so this has to leave room for the rest of start-up inside the shortest one.
         var totalBudget: TimeInterval = 8
         var maximumCacheAge: TimeInterval = 6 * 3600
+        /// Saved addresses this recent are used straight after one failed lookup rather than after every try.
+        var savedAddressAgeAfterFailure: TimeInterval = 3600
         var attempts: Int { delays.count + 1 }
         /// The policy for what is left of one shared start-up budget. The first resolver may use all of it; an optional one (the backup) only a small
         /// share, and none when too little remains, so the backup can never push the start past the connection deadline. Nil: no time left.
@@ -253,7 +255,24 @@ enum ResolverBootstrap {
     /// Addresses a host resolved to earlier in this process. Only used after live lookups failed, only while recent, and always re-validated.
     final class Cache {
         private let lock = NSLock(); private var entries: [String: (addresses: [String], date: Date)] = [:]
-        func store(_ host: String, _ addresses: [String], at date: Date) { lock.lock(); entries[host.lowercased()] = (addresses, date); lock.unlock() }
+        private let file: URL?
+        /// With a file, the entries survive the tunnel process: a new process after a quick stop and start still has the last good addresses.
+        init(file: URL? = nil) {
+            self.file = file
+            guard let file, let data = try? Data(contentsOf: file), let stored = try? JSONDecoder().decode([String: Stored].self, from: data) else { return }
+            for (host, entry) in stored { entries[host] = (entry.addresses, Date(timeIntervalSince1970: entry.at)) }
+        }
+        private struct Stored: Codable { var addresses: [String]; var at: TimeInterval }
+        func store(_ host: String, _ addresses: [String], at date: Date) {
+            lock.lock(); defer { lock.unlock() }
+            entries[host.lowercased()] = (addresses, date)
+            guard let file else { return }
+            let stored = entries.mapValues { Stored(addresses: $0.addresses, at: $0.date.timeIntervalSince1970) }
+            guard let data = try? JSONEncoder().encode(stored) else { return }
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        }
         func recent(_ host: String, now: Date, maximumAge: TimeInterval) -> (addresses: [String], age: TimeInterval)? {
             lock.lock(); defer { lock.unlock() }
             guard let entry = entries[host.lowercased()] else { return nil }
@@ -261,9 +280,10 @@ enum ResolverBootstrap {
             guard age >= 0, age <= maximumAge, let checked = try? validated(entry.addresses) else { return nil }
             return (checked, age)
         }
-        func clear() { lock.lock(); entries = [:]; lock.unlock() }
+        func clear() { lock.lock(); entries = [:]; lock.unlock(); if let file { try? FileManager.default.removeItem(at: file) } }
     }
-    static let sharedCache = Cache()
+    /// Kept on disk in the process's own cache folder. The addresses are public provider addresses and are re-validated on every read.
+    static let sharedCache = Cache(file: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("resolver-bootstrap.json"))
 
     enum PathState: Equatable, ExpressibleByBooleanLiteral {
         case satisfied, unsatisfied, unknown
@@ -322,6 +342,9 @@ enum ResolverBootstrap {
             } catch {
                 if cancelled() { throw AppIssue(message: "Resolver bootstrap was cancelled.") }
                 tries += 1; lastIssue = Self.describe(error); spent += Date().timeIntervalSince(began)
+                // The provider's addresses rarely change. When the system resolver is stalled, a recent saved answer connects at once
+                // instead of waiting out the budget; the TLS name check still protects against a wrong address.
+                if let kept = cache.recent(host, now: now(), maximumAge: policy.savedAddressAgeAfterFailure) { return (kept.addresses, .cached(age: kept.age)) }
             }
         }
         if let kept = cache.recent(host, now: now(), maximumAge: policy.maximumCacheAge) { return (kept.addresses, .cached(age: kept.age)) }
