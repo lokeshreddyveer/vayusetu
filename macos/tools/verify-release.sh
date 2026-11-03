@@ -9,6 +9,8 @@
 #   --skip-build  verify the artifact only (reported the same way)
 #   --no-artifact verify the source only, before a disk image exists (reported as SKIPPED, so the run exits 2, never 0)
 set -uo pipefail
+# A relative disk-image path is relative to where the script was started, so make it absolute before changing directory.
+case "${1:-}" in ""|--*|/*) ;; *) set -- "$PWD/$1" "${@:2}" ;; esac
 cd "$(dirname "$0")/../.."          # repository root
 DMG="${1:-}"; shift || true
 SKIP_IOS=0; SKIP_BUILD=0; NO_ARTIFACT=0
