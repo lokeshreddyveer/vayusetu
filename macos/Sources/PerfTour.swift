@@ -56,6 +56,7 @@ final class PerfBeat: @unchecked Sendable {
 @MainActor final class PerfTour: NSObject {
     static let targets = PerfTargets()
     static let beat = PerfBeat()
+    static var reportPath: String? { argument("--perf-tour") }
     /// A screen that keeps the main thread busy for this long is reported as a hang: the stack is sampled and saved, and the tour ends.
     static let hangAfter: TimeInterval = 8
     private func startWatchdog(report: String?) {
@@ -112,7 +113,7 @@ final class PerfBeat: @unchecked Sendable {
     private var pace: Double { shots == nil ? 1 : 0.35 }
     private func shoot(_ path: String) {
         guard let shots, let view = biggestScroller()?.documentView ?? window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: rep) }
         let name = path.replacingOccurrences(of: " › ", with: "--").replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: " ", with: "_")
         try? FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
         // A page's scroll content has no background of its own (the window paints it), so lay it on the page colour before saving.
@@ -220,6 +221,14 @@ final class PerfBeat: @unchecked Sendable {
 
     private func explore(_ path: String, depth: Int, inherited: Set<String> = []) async {
         await measure(path, kind: "idle", seconds: 2.5)
+        if let busy = steps.last, busy.cpu > 8, let base = Self.reportPath {
+            // Busy while idle: look again for a few seconds with the system's sampler attached, and keep the stack next to the report.
+            let name = path.replacingOccurrences(of: " › ", with: "--").replacingOccurrences(of: " ", with: "_")
+            let sampler = Process(); sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+            sampler.arguments = ["\(ProcessInfo.processInfo.processIdentifier)", "3", "-file", base + ".cpu-\(name).txt"]
+            try? sampler.run()
+            await measure(path, kind: "idle-sampled", seconds: 3.2)
+        }
         shoot(path)
         await scrollTest(path)
         guard depth < 3 else { return }

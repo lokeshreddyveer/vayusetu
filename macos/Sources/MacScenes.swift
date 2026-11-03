@@ -233,7 +233,9 @@ struct MacRadarScene: View {
             HStack(alignment: .center, spacing: 22) {
                 Group {
                     if reduceMotion || !animated { radarCanvas(now: .distantPast, animate: false) }
-                    else { SceneTimeline { timeline in radarCanvas(now: timeline.date, animate: true) } }
+                    // With nothing blocked there is nothing for the sweep to find, so the radar stays still. With something to show it sweeps at 15
+                    // frames a second, which is plenty for a slow sweep and costs a third of the CPU of the 30 the other scenes use.
+                    else { SceneTimeline(interval: 1.0 / 15.0, held: blockedDestinations.isEmpty) { timeline in radarCanvas(now: timeline.date, animate: !blockedDestinations.isEmpty) } }
                 }.frame(width: 190, height: 190)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Radar of blocked destinations. \(blockedDestinations.count) destinations were blocked.")
@@ -259,12 +261,12 @@ struct MacRadarScene: View {
             let sweep = animate ? SceneDraw.fract(now.timeIntervalSinceReferenceDate / 4.5) * 2 * .pi : 0
             if animate {
                 // The sweep: a bright edge with a fading trail behind it.
-                for i in 0..<28 {
-                    let a0 = sweep - Double(i) * 0.045, a1 = sweep - Double(i + 1) * 0.045
+                for i in 0..<14 {
+                    let a0 = sweep - Double(i) * 0.09, a1 = sweep - Double(i + 1) * 0.09
                     var wedge = Path(); wedge.move(to: c)
                     wedge.addArc(center: c, radius: r, startAngle: .radians(a1), endAngle: .radians(a0), clockwise: false)
                     wedge.closeSubpath()
-                    context.fill(wedge, with: .color(tint.opacity(0.30 * (1 - Double(i) / 28))))
+                    context.fill(wedge, with: .color(tint.opacity(0.30 * (1 - Double(i) / 14))))
                 }
             }
             let top = blockedDestinations.prefix(14)

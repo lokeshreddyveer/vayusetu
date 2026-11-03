@@ -96,7 +96,6 @@ struct MacPage<Content: View>: View {
                         Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(VSDesign.actionInk)
                             .frame(width: 44, height: 44)
                             .background(LinearGradient(colors: [VSDesign.accent, VSDesign.accent.opacity(0.72)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .shadow(color: VSDesign.accent.opacity(0.25), radius: 8, y: 3)
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title).font(.system(size: 26, weight: .bold, design: .rounded))

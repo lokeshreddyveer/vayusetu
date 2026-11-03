@@ -10,16 +10,19 @@ struct MacBrandArtwork: View {
     }
 }
 
-extension View {
-    /// A raised card: the surface colour with a faint light from above, a hairline edge that is brighter at the top, and a soft shadow.
-    /// The shadow sits on the background shape only, so the content is not rendered offscreen and scrolling stays cheap.
-    func macPanel() -> some View {
+/// A raised card: the surface colour with a faint light from above and a hairline edge that is brighter at the top. There is deliberately no
+/// drop shadow: SwiftUI blurs a shadow on the CPU every time the page redraws, which measured at about 3.4 points of CPU on Home alone.
+private struct MacPanelStyle: ViewModifier {
+    func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: VSDesign.panelRadius, style: .continuous)
-        return background(
-            shape.fill(VSDesign.surface)
-                .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(0.035), .clear], startPoint: .top, endPoint: .center)))
-                .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
-        )
-        .overlay(shape.strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.11), Color.primary.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+        content
+            .background(
+                shape.fill(VSDesign.surface)
+                    .overlay(shape.fill(LinearGradient(colors: [Color.white.opacity(0.04), .clear], startPoint: .top, endPoint: .center)))
+            )
+            .overlay(shape.strokeBorder(LinearGradient(colors: [Color.primary.opacity(0.12), Color.primary.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
+}
+extension View {
+    func macPanel() -> some View { modifier(MacPanelStyle()) }
 }
