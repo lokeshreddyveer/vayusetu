@@ -438,7 +438,8 @@ struct MacNetwork: View {
                     Toggle("", isOn: Binding(get: { client.status != .off && client.status != .unavailable }, set: { client.setEnabled($0, extensions: extensions) })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                         .disabled(!client.supported || extensions.filterRequesting).accessibilityLabel("Network filter")
                 }
-                if client.status == .unavailable { Text("This build does not include the network filter. It is part of the VayuSetu download from GitHub.").font(.system(size: 12)).foregroundStyle(.secondary) }
+                // A build without the filter says so once: the message from the extension manager, or this line when it has not spoken yet.
+                if client.status == .unavailable, extensions.filterMessage.isEmpty { Text("This build does not include the network filter. It is part of the VayuSetu download from GitHub.").font(.system(size: 12)).foregroundStyle(.secondary) }
                 if !extensions.filterMessage.isEmpty { Label(extensions.filterMessage, systemImage: "info.circle").font(.system(size: 12)).foregroundStyle(.orange) }
                 if client.status == .running, client.settings.askMode, client.settings.mode == .normal {
                     Label("If VayuSetu is closed or cannot ask you, a connection no rule covers is " + (client.settings.unavailableAction == .allow ? "allowed" : "blocked") + " and listed with the reason. You can change this under Settings below.",

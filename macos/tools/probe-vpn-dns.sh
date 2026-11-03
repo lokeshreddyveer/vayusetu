@@ -53,7 +53,10 @@ schedule() { # label offsets... ; returns 0 if any probe through the tunnel work
 }
 abort_approval() { if [ "$(approval)" != "0" ]; then log "STOP: a system-extension approval prompt is waiting. Nothing further was changed."; exit 3; fi; }
 wait_state() { local t=0; while [ $t -lt "$2" ]; do [ "$(nc_state)" = "$1" ] && { log "state $1 after ${t}s"; return 0; }; abort_approval; sleep 1; t=$((t+1)); done; log "TIMEOUT waiting for $1 after ${2}s (state $(nc_state))"; return 1; }
+RESTORING=0
 restore() {
+  # Runs once, however the script ends (finished, failed, Ctrl-C, terminal closed): the Mac is never left with the tunnel up.
+  [ "$RESTORING" = 1 ] && return; RESTORING=1
   log "RESTORE: both off, vpn off, dns off"
   pgrep -x VayuSetuVPN >/dev/null || { open -a /Applications/VayuSetu.app; sleep 12; }
   link both off; wait_state Disconnected 60; sleep 2; link vpn off; sleep 2; link dns off; sleep 6
@@ -66,6 +69,8 @@ pgrep -x VayuSetuVPN >/dev/null || { log "app not running"; exit 64; }
 log "BUILD $(defaults read /Applications/VayuSetu.app/Contents/Info CFBundleVersion) app-sha $(shasum -a 256 /Applications/VayuSetu.app/Contents/MacOS/VayuSetuVPN | cut -c1-16) commit $(cat "$HOME/Documents/VayuSetu/macos/build/test-build-logs/diag-defb246/commit.txt")"
 log "extensions: $(systemextensionsctl list 2>/dev/null | grep -E 'vayusetu.macos.(tunnel|filter)' | grep -v 'waiting to uninstall' | awk '{print $4,$5}' | tr '\n' ' ')"
 [ "$(nc_state)" = Disconnected ] && echo "$(sel)" | grep -q '"vpnEnabled":false' && echo "$(sel)" | grep -q '"dnsEnabled":false' || { log "not starting from off"; exit 64; }
+trap 'log "interrupted: restoring protection off"; restore; exit 130' INT TERM HUP
+trap 'restore' EXIT
 BASE="$(curl -4 -s --max-time 8 https://api64.ipify.org)"; log "baseline egress $BASE, api64.ipify.org -> $ADDR, state=$(nc_state) selection=$(sel)"
 [ -n "$BASE" ] && [ -n "$ADDR" ] || { log "no baseline"; exit 64; }
 # A: VPN only

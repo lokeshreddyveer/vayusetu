@@ -220,6 +220,8 @@ final class PerfBeat: @unchecked Sendable {
     // MARK: the tour
 
     private func explore(_ path: String, depth: Int, inherited: Set<String> = []) async {
+        // A screen that has just opened is still loading (lists read, lookups answered); idle means after that has settled.
+        try? await Task.sleep(for: .milliseconds(Int(900 * pace)))
         await measure(path, kind: "idle", seconds: 2.5)
         if let busy = steps.last, busy.cpu > 8, let base = Self.reportPath {
             // Busy while idle: look again for a few seconds with the system's sampler attached, and keep the stack next to the report.

@@ -42,6 +42,7 @@ step "no unreachable dialogs in any screen (a confirmation nothing can open)" py
 step "no force unwraps or force-try that input can reach" python3 ios/scripts/check-unwraps.py
 step "no animation that runs forever or cannot pause" python3 ios/scripts/check-animations.py
 step "no test or diagnostic launch arguments outside debug builds" python3 ios/scripts/check-debug-hooks.py
+step "no closures stored in the SwiftUI environment" python3 ios/scripts/check-env-closures.py
 step "build status document matches the versions and recorded runs" python3 ios/scripts/build-status.py --check
 say ""
 

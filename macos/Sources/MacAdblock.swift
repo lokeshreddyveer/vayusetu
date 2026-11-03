@@ -167,6 +167,6 @@ struct MacAdblock: View {
         }
     }
     private func link<D: View>(_ title: String, _ detail: String, icon: String, @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink { destination().frame(maxWidth: 880) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain).perfTarget("nav.\(title)")
+        NavigationLink { destination().frame(maxWidth: 880).frame(maxWidth: .infinity).background(VSDesign.background) } label: { MacRow(icon: icon, title: title, detail: detail) { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle()) }.buttonStyle(.plain).perfTarget("nav.\(title)")
     }
 }

@@ -7,7 +7,7 @@ struct MacPanelLayout: Layout {
     var minimumColumnWidth: CGFloat = 440
     var spacing: CGFloat = 16
 
-    /// The column count is sticky: it changes only once the width is clearly past the switch point. Without that, a width near the point flips
+    /// The column count holds two columns a little below the switch point. Without that, a width near the point flips
     /// one column ⇄ two, the page height changes, the scroll bar comes and goes, the width moves by its thickness, and layout never settles.
     struct Cache { var columns: Int? }
     func makeCache(subviews: Subviews) -> Cache { Cache() }
@@ -17,9 +17,8 @@ struct MacPanelLayout: Layout {
         let switchPoint = minimumColumnWidth * 2 + spacing
         let count: Int
         switch cache.columns {
-        case 2?: count = width < switchPoint - Self.margin ? 1 : 2
-        case 1?: count = width >= switchPoint + Self.margin ? 2 : 1
-        default: count = width >= switchPoint ? 2 : 1
+        case 2?: count = width < switchPoint - Self.margin ? 1 : 2     // two columns hold until the width is clearly below the point
+        default: count = width >= switchPoint ? 2 : 1                    // one column moves to two as soon as the point is reached
         }
         cache.columns = count
         return count
