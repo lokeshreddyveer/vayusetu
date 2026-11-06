@@ -276,18 +276,23 @@ struct MacConnectionHealth: View {
     private var latencyPanel: some View {
         MacPanel("Latency, last few minutes", icon: "chart.xyaxis.line", trailing: { provenance(.measured) }) {
             let data = Array(monitor.rounds.suffix(100))
+            // The scale covers both lines (a VPN adds delay to the internet one) up to a ceiling; a reading above it is drawn at the ceiling
+            // instead of off the chart, and anything that does reach the edge is clipped.
+            let peak = max(data.compactMap(\.gatewayMs).max() ?? 0, data.compactMap(\.internetMs).max() ?? 0)
+            let top = min(500.0, max(60.0, peak * 1.2))
             if data.count < 2 { Text("Collecting the first readings…").font(.system(size: 12)).foregroundStyle(.secondary) }
             else {
                 Chart {
                     ForEach(data.indices, id: \.self) { i in
-                        if let ms = data[i].gatewayMs { LineMark(x: .value("Time", data[i].date), y: .value("ms", ms), series: .value("Probe", "Router")).foregroundStyle(VSDesign.accent) }
-                        if let ms = data[i].internetMs { LineMark(x: .value("Time", data[i].date), y: .value("ms", ms), series: .value("Probe", "Internet")).foregroundStyle(Color.green.opacity(0.8)) }
+                        if let ms = data[i].gatewayMs { LineMark(x: .value("Time", data[i].date), y: .value("ms", min(Double(ms), top)), series: .value("Probe", "Router")).foregroundStyle(VSDesign.accent) }
+                        if let ms = data[i].internetMs { LineMark(x: .value("Time", data[i].date), y: .value("ms", min(Double(ms), top)), series: .value("Probe", "Internet")).foregroundStyle(Color.green.opacity(0.8)) }
                         if data[i].gatewayAnswered == false { PointMark(x: .value("Time", data[i].date), y: .value("ms", 0)).foregroundStyle(Color.red).symbol(.cross) }
                     }
                 }
-                .chartYScale(domain: 0...max(60, (data.compactMap(\.gatewayMs).max() ?? 0) * 1.2))
+                .chartYScale(domain: 0...top)
                 .chartForegroundStyleScale(["Router": VSDesign.accent, "Internet": Color.green.opacity(0.8)])
                 .frame(height: 170)
+                .clipped()
                 .accessibilityLabel("Latency to your router and to the internet over the last few minutes. Red crosses mark checks the router did not answer.")
                 Text("Blue is your router, green the internet. A red cross is a check the router did not answer.").font(.system(size: 11)).foregroundStyle(.secondary)
             }

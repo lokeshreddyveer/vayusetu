@@ -305,6 +305,8 @@ enum DNSRuleStore {
         guard let url else { throw AppIssue(message: "App Group access is unavailable. Rebuild with the tunnel's provisioning.") }
         try snapshot.encoded().write(to: url, options: .atomic)
     }
+    /// Whether a snapshot with something in it is saved, without reading it all.
+    static var hasRules: Bool { (url.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } ?? 0) > 32 }
     static func load() -> DNSRuleSnapshot {
         guard let url, let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 16 + 8 + DNSRuleSnapshot.maximumRules * 8,
               let data = try? Data(contentsOf: url), let snapshot = try? DNSRuleSnapshot.decode(data) else { return DNSRuleSnapshot() }

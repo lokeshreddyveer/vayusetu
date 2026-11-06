@@ -54,9 +54,26 @@ import AppKit
     @Published var busy = false
     @Published var ready = false
     @Published var message = ""
-    @Published var stats: TunnelStats? { didSet { noteResolverSample() } }
+    @Published var stats: TunnelStats? { didSet { noteResolverSample(); ensureRulesDelivered() } }
     /// Readings of the tunnel's resolver counters, newest last, for the current session only.
     private(set) var resolverSamples: [ResolverSample] = []
+    #if os(macOS)
+    private var rulesResendAt = Date.distantPast
+    private var rulesResends = 0
+    /// The Mac tunnel cannot read the app's rules file, so the app hands it the rules in a message, once when it connects and once more three
+    /// seconds later. If neither arrived (the message is sent without any reply), the tunnel answers every lookup unfiltered and DNS never
+    /// verifies. The tunnel reports how many rules it holds, so when that is zero while this app has rules to give, send them again, five
+    /// seconds apart and at most eight times, and write each try in the connection log.
+    private func ensureRulesDelivered() {
+        guard status == .connected, let counters = stats?.dnsCounters, counters.rules == 0, rulesResends < 8,
+              Date().timeIntervalSince(rulesResendAt) > 5, DNSRuleStore.hasRules else { return }
+        rulesResendAt = Date(); rulesResends += 1
+        record("The tunnel holds no DNS filter rules; sending them again (try \(rulesResends) of 8).", severity: .warning, category: "dns")
+        reloadDNSRules()
+    }
+    #else
+    private func ensureRulesDelivered() {}
+    #endif
     private func noteResolverSample() {
         guard let wire = stats?.dnsCounters?.upstream, status == .connected else { return }
         let rtt = wire.rtt.map { Int(clamping: $0) }
@@ -295,6 +312,7 @@ import AppKit
                 if lookupsOn { Task { try? await Task.sleep(for: .seconds(2)); self.pushLookupSetting() } }
                 if domainCounting { Task { try? await Task.sleep(for: .seconds(2)); self.pushDomainSetting() } }
                 #if os(macOS)
+                rulesResends = 0; rulesResendAt = Date()
                 reloadDNSRules()   // the root tunnel cannot read this user's App Group file, so hand it the rules
                 Task { try? await Task.sleep(for: .seconds(3)); self.reloadDNSRules() }   // once more: the tunnel may not have been ready for the first message
                 #endif

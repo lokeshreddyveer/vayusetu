@@ -381,10 +381,14 @@ enum WiFiProbe {
         switch gw { case .answered(let ms): round.gatewayMs = ms; round.gatewayAnswered = true; case .timedOut: round.gatewayAnswered = false; case .unavailable: break }
         switch net { case .answered(let ms): round.internetMs = ms; round.internetAnswered = true; case .timedOut: round.internetAnswered = false; case .unavailable: break }
         if wantDNS { switch dns { case .answered(let ms): round.dnsMs = ms; round.dnsAnswered = true; case .timedOut: round.dnsAnswered = false; case .unavailable: break } }
+        // A router that is silent while the internet probe is answered is not an outage: the internet cannot be answering without it. This is what a
+        // VPN that carries all traffic (the kill switch) looks like, because the router is then not reachable from this Mac. It is left unmeasured
+        // rather than counted as 80 % packet loss and a stall.
+        if case .timedOut = gw, round.internetAnswered == true { round.gatewayAnswered = nil }
         // No route at all, or a router address that was there a moment ago and is gone, is an outage and has to be recorded as one.
         if case .unavailable = gw, gateway == nil, gatewayKey != nil { round.gatewayAnswered = false }
         if case .unavailable = net, !path.satisfied { round.internetAnswered = false }
-        let note: String? = { if case .unavailable = gw, gateway != nil { return "This Mac does not allow the router probe." }; return gateway == nil && radio.associated ? "No router address was found." : nil }()
+        let note: String? = { if case .timedOut = gw, round.gatewayAnswered == nil { return "The router does not answer from here, but the internet does. A VPN that carries all traffic hides the router, so this is not counted as a stall." }; if case .unavailable = gw, gateway != nil { return "This Mac does not allow the router probe." }; return gateway == nil && radio.associated ? "No router address was found." : nil }()
         if unavailableNote != note { unavailableNote = note }
         gatewayKey = gateway
         if let gateway, now.timeIntervalSince(lastIdentityCheck) > 60 { lastIdentityCheck = now; Task { await self.checkIdentity(gateway: gateway) } }

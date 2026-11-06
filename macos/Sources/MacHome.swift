@@ -130,7 +130,7 @@ struct MacHome: View {
                 .disabled(store.protectionBusy || tunnel.busy || (needsVPN && (!TunnelController.available || !tunnel.ready)))
         }
     }
-    private func word(_ s: PillState) -> String { switch s { case .off: "Off"; case .active: "On"; case .pending: "Starting…"; case .limited: "Limited"; case .failed: "Failed" } }
+    private func word(_ s: PillState) -> String { store.pillWord(s) }
     private func color(_ s: PillState) -> Color { switch s { case .off: .secondary; case .active: .green; case .pending: .orange; case .limited: .yellow; case .failed: .red } }
 
     // MARK: Right column

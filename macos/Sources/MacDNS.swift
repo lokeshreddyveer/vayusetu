@@ -119,7 +119,7 @@ struct MacDNS: View {
             }
         }
     }
-    private var pillWord: String { switch store.dnsPill { case .off: "Off"; case .active: "Active"; case .pending: "Starting…"; case .limited: "Limited"; case .failed: "Failed" } }
+    private var pillWord: String { store.pillWord(store.dnsPill, on: "Active") }
     private var pillColor: Color { switch store.dnsPill { case .off: .secondary; case .active: .green; case .pending: .orange; case .limited: .yellow; case .failed: .red } }
     private func fact(_ title: String, _ value: String) -> some View {
         GridRow { Text(title).font(.system(size: 12)).foregroundStyle(.secondary).gridColumnAlignment(.trailing); Text(value).font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading) }
