@@ -1,9 +1,10 @@
 import AppKit
+import Combine
 import SwiftUI
 import VayuSetuCore
 
 /// What the menu bar icon says about protection, from what has been observed.
-enum MenuBarState: Equatable {
+enum MenuBarState: Equatable, Hashable {
     case off            // nothing is switched on
     case working        // everything switched on has been seen working
     case unverified     // switched on, not yet seen working
@@ -15,7 +16,14 @@ enum MenuBarState: Equatable {
 /// The icon as a real image, drawn each time it is shown so the arch takes the menu bar's own text colour (light or dark). Handing the
 /// menu bar an image, rather than a SwiftUI view, is what status items expect; a view-based label did not appear at all.
 enum MenuBarImage {
-    static func make(_ state: MenuBarState) -> NSImage {
+    /// One image per state, kept. Its drawing code reads the menu bar's text colour when it is drawn, so one image serves light and dark.
+    /// Making a new image on every redraw (as this used to) allocated and drew one each time anything in the app changed.
+    private static var cache: [MenuBarState: NSImage] = [:]
+    static func image(_ state: MenuBarState) -> NSImage {
+        if let kept = cache[state] { return kept }
+        let made = make(state); cache[state] = made; return made
+    }
+    private static func make(_ state: MenuBarState) -> NSImage {
         let image = NSImage(size: NSSize(width: 21, height: 18), flipped: true) { _ in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             ctx.setLineWidth(1.7); ctx.setLineCap(.round); ctx.setLineJoin(.round)
@@ -52,13 +60,41 @@ struct MenuBarArch: Shape {
     }
 }
 
+/// What the menu bar label needs, worked out at most every two seconds and published only when it changes. The label used to observe the whole
+/// app, the tunnel and the network filter directly: every update from any of them (the tunnel's counters, live connections) re-ran the whole
+/// protection check and drew a new image, many times a second for as long as the app was open.
+@MainActor final class MenuBarStateModel: ObservableObject {
+    @Published private(set) var state: MenuBarState = .off
+    @Published private(set) var headline = "VayuSetu, off"
+    private let store: AppStore, tunnel: TunnelController, filter: FilterClient
+    private var subscriptions = Set<AnyCancellable>()
+    init(store: AppStore, tunnel: TunnelController, filter: FilterClient) {
+        self.store = store; self.tunnel = tunnel; self.filter = filter
+        // objectWillChange fires before the change lands, so look a moment later; the throttle keeps a burst of updates to one look per 2 s,
+        // and `latest` guarantees the last change in a burst is looked at.
+        Publishers.MergeMany(store.objectWillChange.map { _ in () }, tunnel.objectWillChange.map { _ in () }, filter.objectWillChange.map { _ in () })
+            .throttle(for: .seconds(2), scheduler: RunLoop.main, latest: true)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.refresh() }.store(in: &subscriptions)
+        // Evidence also goes stale with time alone (a check expires), so look every ten seconds even when nothing changes.
+        Timer.publish(every: 10, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.refresh() }.store(in: &subscriptions)
+        refresh()
+    }
+    func refresh() {
+        let now = Date()
+        let proof = ProtectionProofEngine.evaluate(MacProofSource.observations(store: store, tunnel: tunnel, filter: filter, now: now), now: now)
+        let newState = MenuBarLabel.state(for: proof)
+        let newHeadline = proof.verdict == .off ? "VayuSetu, off" : "VayuSetu. " + proof.headline
+        if newState != state { state = newState }
+        if newHeadline != headline { headline = newHeadline }
+    }
+}
+
 /// The menu bar label: the mark, and a state that comes from the same evidence as the "Is it working?" panel.
 struct MenuBarLabel: View {
-    @ObservedObject var store: AppStore
-    @ObservedObject var tunnel: TunnelController
-    @ObservedObject var filter: FilterClient
-    @State private var now = Date()
-    private let tick = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    @StateObject private var model: MenuBarStateModel
+    @Environment(\.colorScheme) private var scheme
+    init(store: AppStore, tunnel: TunnelController, filter: FilterClient) { _model = StateObject(wrappedValue: MenuBarStateModel(store: store, tunnel: tunnel, filter: filter)) }
 
     static func state(for proof: ProtectionProof) -> MenuBarState {
         switch proof.verdict {
@@ -68,13 +104,9 @@ struct MenuBarLabel: View {
         case .partial: return proof.checks.contains { $0.outcome == .failed } ? .problem : .unverified
         }
     }
-    private var proof: ProtectionProof { ProtectionProofEngine.evaluate(MacProofSource.observations(store: store, tunnel: tunnel, filter: filter, now: now), now: now) }
-    @Environment(\.colorScheme) private var scheme
     var body: some View {
-        let state = Self.state(for: proof)
-        Image(nsImage: MenuBarImage.make(state))
+        Image(nsImage: MenuBarImage.image(model.state))
             .id(scheme)
-            .onReceive(tick) { now = $0 }
-            .accessibilityLabel(proof.verdict == .off ? "VayuSetu, off" : "VayuSetu. " + proof.headline)
+            .accessibilityLabel(model.headline)
     }
 }
